@@ -59,13 +59,13 @@ To run the script, ensure you have:
 ### Simple Execution
 Run the script to export all call flows to the default subdirectory (`.\CallFlowDiagrams`):
 ```powershell
-.\Export-TeamsCallFlowDrawIO_1.3.ps1
+.\Export-TeamsCallFlowDrawIO.ps1
 ```
 
 ### Custom Output Folder
 Specify a custom directory for saving the generated files:
 ```powershell
-.\Export-TeamsCallFlowDrawIO_1.3.ps1 -OutputPath "C:\Contoso\TelephonyDocs"
+.\Export-TeamsCallFlowDrawIO.ps1 -OutputPath "C:\Contoso\TelephonyDocs"
 ```
 
 ---
