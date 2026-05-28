@@ -1,0 +1,12 @@
+# Generated output
+CallFlowDiagrams/
+*.drawio
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Editors
+.vscode/
+*.bak
