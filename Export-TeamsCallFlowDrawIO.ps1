@@ -1266,7 +1266,7 @@ Write-Host "[2/5] Retrieving Call Queues..." -ForegroundColor Yellow
 $callQueues = [System.Collections.Generic.List[object]]::new()
 $skip = 0
 do {
-    $batch = Get-CsCallQueue -First $batchSize -Skip $skip
+    $batch = Get-CsCallQueue -First $batchSize -Skip $skip -WarningAction SilentlyContinue
     if ($batch) { foreach ($item in $batch) { [void]$callQueues.Add($item) } }
     $skip += $batchSize
 } while ($batch -and $batch.Count -eq $batchSize)
