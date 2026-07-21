@@ -243,6 +243,30 @@ function Get-CallFlowGreeting {
     return $null
 }
 
+function ConvertTo-SafeDateTime {
+<#
+.SYNOPSIS
+    Normalizes a schedule Start/End value to a [DateTime], regardless of the
+    underlying CLR type. Different Teams tenants/module versions have been
+    observed returning WeeklyRecurrentSchedule/FixedSchedule time values as
+    [DateTime], [TimeSpan], or a plain date/time [string] rather than a
+    reliable single type - calling .ToString(<format>) directly on whichever
+    one shows up can throw (e.g. TimeSpan doesn't support date custom format
+    strings). Returns $null if the value can't be interpreted as a date/time,
+    so callers can fall back to a safe placeholder instead of crashing.
+#>
+    param($Value)
+
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [DateTime]) { return $Value }
+    if ($Value -is [TimeSpan]) { return [DateTime]::Today.Add($Value) }
+
+    $parsed = [DateTime]::MinValue
+    if ([DateTime]::TryParse([string]$Value, [ref]$parsed)) { return $parsed }
+
+    return $null
+}
+
 function Get-BusinessHoursSchedule {
 <#
 .SYNOPSIS
@@ -274,9 +298,13 @@ function Get-BusinessHoursSchedule {
         if ($dayHours -and $dayHours.Count -gt 0) {
             $ranges = [System.Collections.Generic.List[string]]::new()
             foreach ($tr in $dayHours) {
-                $startTime = $tr.Start.ToString("HH\:mm")
-                $endTime = $tr.End.ToString("HH\:mm")
-                [void]$ranges.Add("$startTime - $endTime")
+                $startDt = ConvertTo-SafeDateTime $tr.Start
+                $endDt   = ConvertTo-SafeDateTime $tr.End
+                if ($startDt -and $endDt) {
+                    [void]$ranges.Add("$($startDt.ToString('HH\:mm')) - $($endDt.ToString('HH\:mm'))")
+                } else {
+                    [void]$ranges.Add("$(Escape-XmlString $tr.Start) - $(Escape-XmlString $tr.End)")
+                }
             }
             [void]$lines.Add("${abbrev}: $($ranges -join ', ')")
         }
@@ -315,12 +343,19 @@ function Get-HolidayScheduleDates {
 
         $scheduleName = $schedule.Name; if (-not $scheduleName) { $scheduleName = "Holiday" }
         foreach ($range in $schedule.FixedSchedule.DateTimeRanges) {
-            $startStr = $range.Start.ToString("dd MMM yyyy")
-            $endStr   = $range.End.ToString("dd MMM yyyy")
-            if ($startStr -eq $endStr) {
-                [void]$lines.Add("$(Escape-XmlString $scheduleName): $startStr")
+            $startDt = ConvertTo-SafeDateTime $range.Start
+            $endDt   = ConvertTo-SafeDateTime $range.End
+            if ($startDt -and $endDt) {
+                $startStr = $startDt.ToString("dd MMM yyyy")
+                $endStr   = $endDt.ToString("dd MMM yyyy")
             } else {
-                [void]$lines.Add("$(Escape-XmlString $scheduleName): $startStr - $endStr")
+                $startStr = "$($range.Start)"
+                $endStr   = "$($range.End)"
+            }
+            if ($startStr -eq $endStr) {
+                [void]$lines.Add("$(Escape-XmlString $scheduleName): $(Escape-XmlString $startStr)")
+            } else {
+                [void]$lines.Add("$(Escape-XmlString $scheduleName): $(Escape-XmlString $startStr) - $(Escape-XmlString $endStr)")
             }
         }
     }
@@ -898,13 +933,19 @@ function Test-DiagramIntegrity {
     }
 
     # --- Edges referencing missing nodes ---
-    $definedIds = [System.Collections.Generic.HashSet[string]]($NodeMap.Keys)
+    # Look up membership via $NodeMap.ContainsKey directly, exactly as
+    # Build-DiagramXml does when it resolves each edge. Casting
+    # $NodeMap.Keys to [HashSet[string]] is NOT equivalent: on Windows
+    # PowerShell 5.1 that cast collapses all keys into a single
+    # space-joined string, so every real key then reports as missing and
+    # every edge is falsely flagged as dangling even when the emitted XML
+    # is completely valid.
     foreach ($edge in $Edges) {
-        if (-not $definedIds.Contains($edge.SourceNodeId)) {
+        if (-not $NodeMap.ContainsKey($edge.SourceNodeId)) {
             Write-Warning "$prefix Edge references undefined source node '$($edge.SourceNodeId)'."
             $isClean = $false
         }
-        if (-not $definedIds.Contains($edge.TargetNodeId)) {
+        if (-not $NodeMap.ContainsKey($edge.TargetNodeId)) {
             Write-Warning "$prefix Edge references undefined target node '$($edge.TargetNodeId)'."
             $isClean = $false
         }
@@ -1711,14 +1752,20 @@ $utf8NoBom    = [System.Text.UTF8Encoding]::new($false)
 
 # ---- Write _ExportSummary.json ----
 $totalElapsed  = (Get-Date) - $_scriptStart
+$totalNodesSum = 0; $totalEdgesSum = 0; $totalFileSizeSum = 0
+foreach ($row in $summaryRows) {
+    $totalNodesSum    += $row.Nodes
+    $totalEdgesSum    += $row.Edges
+    $totalFileSizeSum += $row.FileSizeBytes
+}
 $summaryObject = @{
     ExportedAt      = (Get-Date -Format "yyyy-MM-ddTHH:mm:ss")
     StylePreset     = $StylePreset
     TotalDuration_s = [Math]::Round($totalElapsed.TotalSeconds, 1)
     AutoAttendants  = $summaryRows
-    TotalNodes      = ($summaryRows | Measure-Object -Property Nodes -Sum).Sum
-    TotalEdges      = ($summaryRows | Measure-Object -Property Edges -Sum).Sum
-    TotalFileSizeKB = [Math]::Round((($summaryRows | Measure-Object -Property FileSizeBytes -Sum).Sum / 1KB), 1)
+    TotalNodes      = $totalNodesSum
+    TotalEdges      = $totalEdgesSum
+    TotalFileSizeKB = [Math]::Round($totalFileSizeSum / 1KB, 1)
     DiagramsWithWarnings = $warnedCount
     DiagramsFailed        = $failedCount
 }

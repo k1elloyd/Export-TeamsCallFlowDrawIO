@@ -8,7 +8,9 @@ A single self-contained PowerShell script, [Export-TeamsCallFlowDrawIO.ps1](Expo
 
 ## Running the script
 
-Requires the `MicrosoftTeams` PowerShell module and an active `Connect-MicrosoftTeams` session (the script checks this via `Get-CsTenantLicensingInformation` at startup and exits if not connected — there is no offline/mock mode, so most of the script cannot be exercised without live tenant access).
+Requires the `MicrosoftTeams` PowerShell module and an active `Connect-MicrosoftTeams` session (the script checks this via `Get-CsTenant` at startup and exits if not connected — there is no offline/mock mode, so most of the script cannot be exercised without live tenant access).
+
+Target runtime is **Windows PowerShell 5.1** (what most Teams admins run), not just PowerShell 7. Several cmdlets treat `[hashtable]` lists differently between the two engines — see the hashtable-adapter note under "Key invariants" — so validate changes against 5.1 (`powershell.exe`), not only `pwsh`.
 
 ```powershell
 Install-Module -Name MicrosoftTeams -Force -AllowClobber
@@ -57,4 +59,7 @@ Error handling policy: the three tenant data-retrieval loops (step 2) abort the 
 - `Add-DiagramNode` is idempotent per `NodeId` — call sites rely on this for dedup; don't bypass it with direct `$nodes.Add(...)`.
 - Node IDs are sanitized via `Sanitise-NodeId` and suffixed conventions matter: `_timeout` / `_overflow` suffixes on CQ child nodes are pattern-matched (`_(timeout|overflow)$`) by the layout engine to apply special positioning — don't rename these without updating `Calculate-NodePositions`. Similarly, the `_b$BranchIndex` suffix on AA/CQ/User target NodeIds (see step 4) is how branch-scoped dedup works — don't strip or bypass it when adding new call sites into `Resolve-AndAddTargetNode`.
 - All XML text content must go through `Escape-XmlString`.
-- Nodes/edges are `[hashtable]`, not `[PSCustomObject]`. `Sort-Object <BarePropertyName>` does **not** sort a hashtable list by that key (verified: it silently falls back to something other than the intended order) — always use `Sort-Object { $_.PropertyName }` instead. `Calculate-NodePositions` and `Build-IndexPage` sort hashtable lists this way (`{ $_.PositionInBranch }`, `{ $_.Tier }`, `{ $_.Name }`) — don't introduce a new bare-property sort on this data.
+- Nodes/edges are `[hashtable]`, not `[PSCustomObject]`. Windows PowerShell 5.1's hashtable adapter does **not** expose keys as member properties to several pipeline cmdlets, so operations that work in PowerShell 7 silently misbehave in 5.1 (the shipping target). Confirmed cases, all worked around in the code — do not reintroduce these forms on hashtable-list data:
+  - `Sort-Object <BarePropertyName>` → sorts by the wrong order. Use `Sort-Object { $_.Prop }` (`Calculate-NodePositions`, `Build-IndexPage`).
+  - `Measure-Object -Property <Name>` → throws `GenericMeasurePropertyNotFound`. Sum manually with a `foreach` loop (`_ExportSummary.json` totals in MAIN SCRIPT).
+  - `[HashSet[string]]($hashtable.Keys)` → collapses all keys into a single space-joined string instead of a set of keys, so `.Contains(<key>)` is always false. Use `$hashtable.ContainsKey(...)` directly (`Test-DiagramIntegrity`).
