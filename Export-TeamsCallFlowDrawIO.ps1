@@ -322,6 +322,14 @@ function Get-HolidayScheduleDates {
     Formats the fixed date ranges for the Holiday schedule(s) linked to a given
     Holiday call flow, so the diagram can show *when* a Holiday branch fires
     rather than just its name. Returns $null if no fixed date ranges are found.
+
+    The result is deliberately kept compact - it becomes an edge label, so a
+    schedule with many dates (e.g. a full year of national public holidays) is
+    collapsed to "<name> (N dates)" rather than listing every one, otherwise the
+    label stretches across the page and overlaps the title/root node. Schedules
+    with 3 or fewer ranges are listed inline. Each schedule name is shown once,
+    not repeated per range. Output uses <br/> between schedules and is
+    pre-escaped for use inside an html=1 label.
 .PARAMETER HolidayAssociations
     All of the Auto Attendant's Holiday-type CallHandlingAssociations. Multiple
     holiday schedules can route to the same CallFlowId (e.g. "Christmas Day" and
@@ -342,26 +350,44 @@ function Get-HolidayScheduleDates {
         if (-not $schedule -or -not $schedule.FixedSchedule -or -not $schedule.FixedSchedule.DateTimeRanges) { continue }
 
         $scheduleName = $schedule.Name; if (-not $scheduleName) { $scheduleName = "Holiday" }
+
+        $dateStrs = [System.Collections.Generic.List[string]]::new()
         foreach ($range in $schedule.FixedSchedule.DateTimeRanges) {
             $startDt = ConvertTo-SafeDateTime $range.Start
             $endDt   = ConvertTo-SafeDateTime $range.End
             if ($startDt -and $endDt) {
-                $startStr = $startDt.ToString("dd MMM yyyy")
-                $endStr   = $endDt.ToString("dd MMM yyyy")
+                # Teams stores the end boundary as exclusive - midnight at the
+                # start of the day AFTER the final holiday day - so a single-day
+                # holiday comes back as Start=day, End=next day (confirmed from
+                # live data: New Year's Day exports as 01 Jan -> 02 Jan). Step the
+                # end back by one tick so it lands on the real last holiday day,
+                # so a one-day holiday reads as one date.
+                $effEnd = $endDt.AddTicks(-1)
+                if ($effEnd -lt $startDt) { $effEnd = $startDt }
+
+                if ($startDt.Date -eq $effEnd.Date) {
+                    [void]$dateStrs.Add($startDt.ToString("dd MMM yyyy"))
+                } elseif ($startDt.Year -eq $effEnd.Year) {
+                    [void]$dateStrs.Add("$($startDt.ToString('dd MMM')) - $($effEnd.ToString('dd MMM yyyy'))")
+                } else {
+                    [void]$dateStrs.Add("$($startDt.ToString('dd MMM yyyy')) - $($effEnd.ToString('dd MMM yyyy'))")
+                }
             } else {
-                $startStr = "$($range.Start)"
-                $endStr   = "$($range.End)"
+                [void]$dateStrs.Add("$($range.Start)")
             }
-            if ($startStr -eq $endStr) {
-                [void]$lines.Add("$(Escape-XmlString $scheduleName): $(Escape-XmlString $startStr)")
-            } else {
-                [void]$lines.Add("$(Escape-XmlString $scheduleName): $(Escape-XmlString $startStr) - $(Escape-XmlString $endStr)")
-            }
+        }
+
+        if ($dateStrs.Count -eq 0) { continue }
+
+        if ($dateStrs.Count -le 3) {
+            [void]$lines.Add("$(Escape-XmlString $scheduleName): $(Escape-XmlString ($dateStrs -join ', '))")
+        } else {
+            [void]$lines.Add("$(Escape-XmlString $scheduleName) ($($dateStrs.Count) dates)")
         }
     }
 
     if ($lines.Count -eq 0) { return $null }
-    return ($lines -join ", ")
+    return ($lines -join "<br/>")
 }
 
 function Resolve-CallTarget {
@@ -1522,7 +1548,7 @@ function Export-AADiagram {
     foreach ($ha in $holAssocs) {
         $hf = $aa.CallFlows | Where-Object { $_.Id -eq $ha.CallFlowId } | Select-Object -First 1
         if ($hf -and $seenFlowIds.Add($hf.Id)) {
-            $hn = $hf.Name; if (-not $hn) { $hn = "Holiday" }
+            $hn = if ($hf.Name) { Escape-XmlString $hf.Name } else { "Holiday" }
             $holidayDates = Get-HolidayScheduleDates -AutoAttendant $aa -HolidayAssociations $holAssocs -CallFlowId $hf.Id
             if ($holidayDates) { $hn = "$hn<br/>$holidayDates" }
             Build-CallFlowNodes -CallFlow $hf -ParentNodeId $aaNodeId `
