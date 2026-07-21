@@ -1526,7 +1526,7 @@ $_scriptStart = Get-Date
 # Verify Teams connection before executing
 Write-Host "Verifying Microsoft Teams connection..." -ForegroundColor Yellow
 try {
-    $null = Get-CsTenantLicensingInformation -ErrorAction Stop
+    $null = Get-CsTenant -ErrorAction Stop
 } catch {
     Write-Host "[!] Error: Not connected to Microsoft Teams." -ForegroundColor Red
     Write-Host "Please run 'Connect-MicrosoftTeams' first in your PowerShell session before executing this script." -ForegroundColor Yellow
