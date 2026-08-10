@@ -397,6 +397,12 @@ function Resolve-CallTarget {
     Handles ApplicationEndpoint, ConfigurationEndpoint, User, ExternalPstn,
     SharedVoicemail, and DisconnectCall actions.
     Falls back to direct AA/CQ identity lookup if resource account not found.
+
+    Shared voicemail is reported inconsistently by Teams: Auto Attendant menu
+    options surface it as a target Type of "SharedVoicemail", but a Call Queue
+    timeout/overflow surfaces it as an Action of "SharedVoicemail"/"Voicemail"
+    with a target Type of "Mailbox". Both forms are mapped to SharedVoicemail so
+    a CQ voicemail target doesn't fall through to "Unknown (MailBox)".
 .OUTPUTS
     Hashtable with keys: DisplayName, Type, LinkedId
 #>
@@ -413,6 +419,14 @@ function Resolve-CallTarget {
 
     if ($Action -eq "DisconnectCall") {
         return @{ DisplayName = "Disconnect"; Type = "Disconnect"; LinkedId = $null }
+    }
+
+    # Call Queue timeout/overflow to shared voicemail arrives as an Action of
+    # "SharedVoicemail" (or "Voicemail") rather than a distinct target Type, so
+    # key off the action before inspecting the target type.
+    if ($Action -match 'voicemail') {
+        $vmId = if ($CallTarget) { $CallTarget.Id } else { $null }
+        return @{ DisplayName = "Shared Voicemail"; Type = "SharedVoicemail"; LinkedId = $vmId }
     }
 
     if ($null -eq $CallTarget) {
@@ -491,7 +505,7 @@ function Resolve-CallTarget {
             $phoneNumber = $targetId -replace 'tel:', ''
             return @{ DisplayName = "External $phoneNumber"; Type = "ExternalPstn"; LinkedId = $null }
         }
-        "SharedVoicemail" {
+        { $_ -in @("SharedVoicemail", "Mailbox") } {
             return @{ DisplayName = "Shared Voicemail"; Type = "SharedVoicemail"; LinkedId = $targetId }
         }
         default {
