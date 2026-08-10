@@ -871,6 +871,7 @@ function Build-CallFlowNodes {
         }
 
         $optionIndex = 0
+        $targetOptionLabels = [ordered]@{}   # targetNodeId -> List[string] of option labels
         foreach ($option in $menuOptions) {
             $dtmfKey = Get-DtmfDisplayKey $option.DtmfResponse.ToString()
             $action = $option.Action.ToString()
@@ -894,10 +895,24 @@ function Build-CallFlowNodes {
                     $voicePrompt = ($option.VoiceResponses | Select-Object -First 1)
                     if ($voicePrompt) { $optionLabel = "Press $dtmfKey / Say $(Escape-XmlString $voicePrompt)" }
                 }
-                Add-DiagramEdge -SourceNodeId $menuNodeId -TargetNodeId $targetNodeId `
-                    -Label $optionLabel -StyleKey "MenuOption" -Edges $Edges -NextCellId $NextCellId | Out-Null
+                if (-not $targetOptionLabels.Contains($targetNodeId)) {
+                    $targetOptionLabels[$targetNodeId] = [System.Collections.Generic.List[string]]::new()
+                }
+                [void]$targetOptionLabels[$targetNodeId].Add($optionLabel)
             }
             $optionIndex++
+        }
+
+        # Emit one connector per distinct target. When several menu options
+        # resolve to the same node (e.g. Press 2 and Press 3 both route to one
+        # call queue), branch-scoped dedup collapses them onto a single node, so
+        # drawing an edge per option stacks multiple connectors and labels on top
+        # of each other. Combine the keys into a single edge ("Press 2, Press 3")
+        # instead.
+        foreach ($tid in $targetOptionLabels.Keys) {
+            $combinedLabel = ($targetOptionLabels[$tid]) -join ', '
+            Add-DiagramEdge -SourceNodeId $menuNodeId -TargetNodeId $tid `
+                -Label $combinedLabel -StyleKey "MenuOption" -Edges $Edges -NextCellId $NextCellId | Out-Null
         }
     }
     else {
