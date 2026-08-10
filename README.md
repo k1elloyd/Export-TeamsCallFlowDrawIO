@@ -8,12 +8,13 @@ This tool solves the challenge of manually documenting complex cloud telephony s
 
 ## 🌟 Key Features
 
-- **End-to-End Call Path Analysis:** Maps entire call routing including Business Hours, After Hours, Holiday calendars, IVR key presses (DTMF and voice triggers), Call Queue agent counts, routing methods, timeouts, and overflow rules.
-- **Dynamic Overlap-Free Layout:** Powered by an advanced, boundary-aware layout engine that calculates the precise footprint of nodes (including shifted timeout/overflow children, schedule notes, and speech greetings), completely eliminating horizontal node collisions or overlapping branches.
-- **Vibrant Modern Styling:** Employs premium, professional color-coded themes (Segoe UI typography, HSL-harmonized fills, clean rounded borders, and distinct shapes) for instant visual scanning.
+- **End-to-End Call Path Analysis:** Maps entire call routing including Business Hours, After Hours, Holiday calendars (with the actual holiday date ranges), IVR key presses (DTMF and voice triggers), Call Queue agent counts, routing methods, timeouts, and overflow rules.
+- **Dynamic Overlap-Free Layout:** Powered by an advanced, boundary-aware layout engine that calculates the precise footprint of nodes (including shifted timeout/overflow children, schedule notes, and speech greetings), completely eliminating horizontal node collisions or overlapping branches. Multiple IVR keys that route to the same target are combined onto a single connector (e.g. `Press 2, Press 3`) rather than stacked on top of each other.
+- **Selectable Colour Themes:** Ships with three palettes selected via `-StylePreset`: `Default` (vibrant Microsoft-themed), `HighContrast` (bold colours and thick borders for accessibility / projectors), and `Monochrome` (greyscale for black-and-white printing). Segoe UI typography, HSL-harmonized fills, clean rounded borders, and distinct shapes throughout.
 - **Rich Greeting Note Integration:** Automatically extracts Text-to-Speech (TTS) prompts or audio greeting filenames and renders them as elegant, clean sticky notes floating next to their respective menu nodes.
 - **Integrated Schedule Panels:** Decodes complex weekly recurrent business hour schedules and displays them as clean, HTML-formatted calendar panels next to the root Auto Attendant.
-- **Robust Target Resolution:** Intelligently maps targets (Application Accounts, Users, External PSTN numbers, and Shared Voicemails). Fallback logic ensures that even voice apps with missing/unlisted Resource Accounts are resolved by scanning `ApplicationInstances` across the tenant.
+- **Robust Target Resolution:** Intelligently maps targets (Application Accounts, Users, External PSTN numbers, and Shared Voicemails — including Call Queue timeout/overflow voicemail). Fallback logic ensures that even voice apps with missing/unlisted Resource Accounts are resolved via their `ApplicationInstances` across the tenant.
+- **Fault-Tolerant Export:** A malformed Auto Attendant is logged and skipped rather than aborting the whole run, and an `_ExportSummary.json` records per-diagram statistics and any warnings/failures.
 
 ---
 
@@ -27,6 +28,7 @@ The exporter uses a clear, highly legible color hierarchy:
 | **Call Queue (CQ)** | Pill Rectangle | Green (`#548235`) | Routing container showing agent count & method |
 | **Business Hours Menu** | Rhombus | Yellow (`#FFC000`) | IVR key options during business hours |
 | **After Hours Menu** | Rhombus | Dark Blue (`#2E75B6`) | IVR key options during closed hours |
+| **Holiday Menu** | Hexagon | Gold (`#BF8F00`) | IVR / routing during a holiday; the connector shows the holiday date(s) |
 | **User** | Rounded Rectangle | Purple (`#7030A0`) | Call routed directly to a Teams user |
 | **External PSTN** | Rounded Rectangle | Orange (`#ED7D31`) | Call routed out to an external phone number |
 | **Shared Voicemail** | Parallelogram | Gray (`#A5A5A5`) | Call routed to a shared voicemail inbox |
@@ -68,6 +70,13 @@ Specify a custom directory for saving the generated files:
 .\Export-TeamsCallFlowDrawIO.ps1 -OutputPath "C:\Contoso\TelephonyDocs"
 ```
 
+### Colour Theme
+Choose a palette with `-StylePreset` (`Default`, `HighContrast`, or `Monochrome`):
+```powershell
+.\Export-TeamsCallFlowDrawIO.ps1 -StylePreset HighContrast
+.\Export-TeamsCallFlowDrawIO.ps1 -StylePreset Monochrome -OutputPath .\Printable
+```
+
 ---
 
 ## 📂 Outputs Generated
@@ -76,8 +85,10 @@ Inside your output folder, the script will generate:
 
 1. **Individual `.drawio` files** (e.g. `Main_Line_AA.drawio`): A clean, single-page flow dedicated to each discovered Auto Attendant.
 2. **`_AllCallFlows.drawio`**: A master drawing sheet. When opened, it displays:
+   - An **Index** cover page — an alphabetised directory of every Auto Attendant with its phone number(s), so a large export has a starting point.
    - A visual **Legend** page detailing all node colors, shapes, and edge connector patterns.
    - Separate, named, high-fidelity **tabbed pages** for every Auto Attendant in your organization.
+3. **`_ExportSummary.json`**: A machine-readable run summary — per-diagram node/edge counts, file sizes, style preset, total duration, and counts of diagrams with validation warnings or that failed to export.
 
 ---
 
