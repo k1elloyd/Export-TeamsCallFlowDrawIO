@@ -107,6 +107,6 @@ The script features a custom-built, tier-based hierarchical layout engine.
 - **Tier 0:** Auto Attendant Root & Schedule Panel.
 - **Tier 1:** Main Call Flows (Business Hours, After Hours, Holiday paths).
 - **Tier 2:** IVR Menus, Menu Options, Call Queues, and Direct Targets.
-- **Tier 3:** Queue Timeout and Overflow targets (positioned cleanly below the parent CQ).
+- **Tier 3+:** Queue exception handling — Timeout, Overflow and No Agents — and their targets, hung below the parent CQ. Nested queues (e.g. a queue that overflows to another queue) get their own exception rules drawn too, however deep the chain goes, with room reserved so nothing overlaps.
 
 Rather than placing nodes blindly or capping branch widths arbitrarily, the algorithm computes **boundary footprints** for each branch. By accounting for the size of attached speech greeting notes (+295px) and left/right shifts of Queue Timeout (-90px) and Overflow (+90px) actions, it reserves exactly enough space horizontally and vertically, assuring **100% collision-free diagrams** regardless of your configuration's complexity.
