@@ -8,12 +8,14 @@ This tool solves the challenge of manually documenting complex cloud telephony s
 
 ## 🌟 Key Features
 
-- **End-to-End Call Path Analysis:** Maps entire call routing including Business Hours, After Hours, Holiday calendars (with the actual holiday date ranges), IVR key presses (DTMF and voice triggers), Call Queue agent counts, routing methods, timeouts, and overflow rules.
-- **Dynamic Overlap-Free Layout:** Powered by an advanced, boundary-aware layout engine that calculates the precise footprint of nodes (including shifted timeout/overflow children, schedule notes, and speech greetings), completely eliminating horizontal node collisions or overlapping branches. Multiple IVR keys that route to the same target are combined onto a single connector (e.g. `Press 2, Press 3`) rather than stacked on top of each other.
+- **End-to-End Call Path Analysis:** Maps entire call routing including Business Hours, After Hours, Holiday calendars (with the actual holiday date ranges), IVR key presses (DTMF and voice triggers), Call Queue agent counts, routing methods, and all three queue exception rules (timeout, overflow, no agents), including for queues nested behind other queues.
+- **Dynamic Overlap-Free Layout:** Powered by an advanced, boundary-aware layout engine that calculates the precise footprint of nodes (including whole nested-queue subtrees, queue settings notes, schedule notes, and speech greetings), completely eliminating horizontal node collisions or overlapping branches. Multiple IVR keys that route to the same target are combined onto a single connector (e.g. `Press 2, Press 3`) rather than stacked on top of each other.
 - **Selectable Colour Themes:** Ships with three palettes selected via `-StylePreset`: `Default` (vibrant Microsoft-themed), `HighContrast` (bold colours and thick borders for accessibility / projectors), and `Monochrome` (greyscale for black-and-white printing). Segoe UI typography, HSL-harmonized fills, clean rounded borders, and distinct shapes throughout.
 - **Rich Greeting Note Integration:** Automatically extracts Text-to-Speech (TTS) prompts or audio greeting filenames and renders them as elegant, clean sticky notes floating next to their respective menu nodes.
+- **Queue Settings Notes:** Each Call Queue gets a note beside it summarising where its agents come from (users / groups / Teams channel), agent alert time, presence-based routing, agent opt-out, conference mode, callback (key and conditions), greeting, and music on hold. Turn it off with `-HideQueueSettings` for a more compact diagram.
+- **Clickable Nested Auto Attendants:** In `_AllCallFlows.drawio`, an Auto Attendant that routes to another Auto Attendant links to that AA's page, and every row on the Index page links to its diagram.
 - **Integrated Schedule Panels:** Decodes complex weekly recurrent business hour schedules and displays them as clean, HTML-formatted calendar panels next to the root Auto Attendant.
-- **Robust Target Resolution:** Intelligently maps targets (Application Accounts, Users, External PSTN numbers, and Shared Voicemails — including Call Queue timeout/overflow voicemail). Fallback logic ensures that even voice apps with missing/unlisted Resource Accounts are resolved via their `ApplicationInstances` across the tenant.
+- **Robust Target Resolution:** Intelligently maps targets (Application Accounts, Users, External PSTN numbers, shared voicemail — labelled with the Microsoft 365 group name when a Graph session is available — and a user's personal voicemail). Fallback logic ensures that even voice apps with missing/unlisted Resource Accounts are resolved via their `ApplicationInstances` across the tenant.
 - **Fault-Tolerant Export:** A malformed Auto Attendant is logged and skipped rather than aborting the whole run, and an `_ExportSummary.json` records per-diagram statistics and any warnings/failures.
 
 ---
@@ -31,8 +33,9 @@ The exporter uses a clear, highly legible color hierarchy:
 | **Holiday Menu** | Hexagon | Gold (`#BF8F00`) | IVR / routing during a holiday; the connector shows the holiday date(s) |
 | **User** | Rounded Rectangle | Purple (`#7030A0`) | Call routed directly to a Teams user |
 | **External PSTN** | Rounded Rectangle | Orange (`#ED7D31`) | Call routed out to an external phone number |
-| **Shared Voicemail** | Parallelogram | Gray (`#A5A5A5`) | Call routed to a shared voicemail inbox |
-| **Timeout / Overflow** | Parallelogram | Light Orange (`#ED7D31`) | Queue routing action on timeout or cap limit |
+| **Voicemail** | Parallelogram | Gray (`#A5A5A5`) | Shared voicemail (with group name when available) or a user's personal voicemail |
+| **Timeout / Overflow / No Agents** | Parallelogram | Light Orange (`#ED7D31`) | Queue exception handling: timeout, overflow cap, or no agents available |
+| **Queue Settings** | Sticky Note | Light Green (`#E2EFDA`) | Agent sources, routing options, callback, greeting and music on hold for a Call Queue |
 | **Greeting Note** | Sticky Note | Light Yellow (`#FFF2CC`) | Renders Text-to-Speech or audio greeting file details |
 | **Schedule Panel** | Sticky Note | Light Blue (`#DAE8FC`) | Renders HTML calendar hours next to AA roots |
 | **Disconnect** | Ellipse | Dark Red (`#C00000`) | Call termination points |
@@ -52,6 +55,10 @@ To run the script, ensure you have:
 4. **Active Session:** You must connect to Teams PowerShell prior to running the script.
    ```powershell
    Connect-MicrosoftTeams
+   ```
+5. **Optional — shared voicemail names:** Teams only returns the Microsoft 365 group ID for a shared voicemail target. If you also have the `Microsoft.Graph` module and connect with group read access before running, the diagrams show the group's name (e.g. `Shared Voicemail: Newcastle VM`). Without it — or without the permission — they just say `Shared Voicemail`.
+   ```powershell
+   Connect-MgGraph -Scopes Group.Read.All
    ```
 
 ---
@@ -77,6 +84,12 @@ Choose a palette with `-StylePreset` (`Default`, `HighContrast`, or `Monochrome`
 .\Export-TeamsCallFlowDrawIO.ps1 -StylePreset Monochrome -OutputPath .\Printable
 ```
 
+### Compact Diagrams
+Leave out the per-queue settings notes:
+```powershell
+.\Export-TeamsCallFlowDrawIO.ps1 -HideQueueSettings
+```
+
 ---
 
 ## 📂 Outputs Generated
@@ -85,9 +98,9 @@ Inside your output folder, the script will generate:
 
 1. **Individual `.drawio` files** (e.g. `Main_Line_AA.drawio`): A clean, single-page flow dedicated to each discovered Auto Attendant.
 2. **`_AllCallFlows.drawio`**: A master drawing sheet. When opened, it displays:
-   - An **Index** cover page — an alphabetised directory of every Auto Attendant with its phone number(s), so a large export has a starting point.
+   - An **Index** cover page — an alphabetised directory of every Auto Attendant with its phone number(s); click a row to jump to that diagram.
    - A visual **Legend** page detailing all node colors, shapes, and edge connector patterns.
-   - Separate, named, high-fidelity **tabbed pages** for every Auto Attendant in your organization.
+   - Separate, named, high-fidelity **tabbed pages** for every Auto Attendant in your organization. Nested Auto Attendant nodes link to their own page.
 3. **`_ExportSummary.json`**: A machine-readable run summary — per-diagram node/edge counts, file sizes, style preset, total duration, and counts of diagrams with validation warnings or that failed to export.
 
 ---
@@ -109,4 +122,4 @@ The script features a custom-built, tier-based hierarchical layout engine.
 - **Tier 2:** IVR Menus, Menu Options, Call Queues, and Direct Targets.
 - **Tier 3+:** Queue exception handling — Timeout, Overflow and No Agents — and their targets, hung below the parent CQ. Nested queues (e.g. a queue that overflows to another queue) get their own exception rules drawn too, however deep the chain goes, with room reserved so nothing overlaps.
 
-Rather than placing nodes blindly or capping branch widths arbitrarily, the algorithm computes **boundary footprints** for each branch. By accounting for the size of attached speech greeting notes (+295px) and left/right shifts of Queue Timeout (-90px) and Overflow (+90px) actions, it reserves exactly enough space horizontally and vertically, assuring **100% collision-free diagrams** regardless of your configuration's complexity.
+Rather than placing nodes blindly or capping branch widths arbitrarily, the algorithm computes **boundary footprints** for each branch. By accounting for attached notes (greetings on the right, queue settings on the left) and the full width of every queue's exception subtree, it reserves exactly enough space horizontally and vertically, assuring **100% collision-free diagrams** regardless of your configuration's complexity.

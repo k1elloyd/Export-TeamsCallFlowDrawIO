@@ -7,8 +7,12 @@
     Connects to Microsoft Teams PowerShell, retrieves all Auto Attendants, Call Queues,
     and Resource Accounts, then generates draw.io (.drawio) XML files showing the complete
     call flow including business hours, after hours, holidays, menu options, Call Queue
-    routing, timeout/overflow handling, nested Auto Attendants, TTS/audio greetings,
-    and business hours schedules.
+    routing, timeout/overflow/no-agents handling, queue settings, nested Auto Attendants
+    (linked to their own page in the combined file), TTS/audio greetings, and business
+    hours schedules.
+
+    If a Microsoft Graph session is also active (Connect-MgGraph -Scopes Group.Read.All),
+    shared voicemail targets are labelled with the Microsoft 365 group's name.
 
     Each Auto Attendant gets its own .drawio file, plus a combined _AllCallFlows.drawio
     is created with one page per Auto Attendant and a Legend page.
@@ -24,20 +28,28 @@
     - Monochrome   : Greyscale palette for black-and-white printing.
     Defaults to Default.
 
+.PARAMETER HideQueueSettings
+    Omit the per-queue settings note (agent sources, alert time, presence-based
+    routing, opt-out, conference mode, callback, greeting, music on hold) for a
+    more compact diagram.
+
 .EXAMPLE
     .\Export-TeamsCallFlowDrawIO.ps1
     .\Export-TeamsCallFlowDrawIO.ps1 -OutputPath "C:\Customers\Contoso\CallFlows"
     .\Export-TeamsCallFlowDrawIO.ps1 -StylePreset HighContrast
     .\Export-TeamsCallFlowDrawIO.ps1 -StylePreset Monochrome -OutputPath .\Printable
+    .\Export-TeamsCallFlowDrawIO.ps1 -HideQueueSettings
 
 .NOTES
     Author  : Kieran Lloyd
-    Version : 1.5
-    Date    : 2026-06-25
+    Version : 1.6
+    Date    : 2026-09-30
 
     Prerequisites:
       - MicrosoftTeams PowerShell module installed
       - Connected to Teams via Connect-MicrosoftTeams
+      - Optional: Microsoft.Graph module + Connect-MgGraph -Scopes Group.Read.All
+        to show shared voicemail group names
       - Sufficient admin permissions to read AA/CQ/Resource Account configuration
 #>
 
@@ -48,13 +60,23 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateSet("Default", "HighContrast", "Monochrome")]
-    [string]$StylePreset = "Default"
+    [string]$StylePreset = "Default",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$HideQueueSettings
 )
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 $ErrorActionPreference = "Continue"
+
+# Shared voicemail group-name lookup via Microsoft Graph. Enabled in MAIN SCRIPT
+# only when a Graph session is already connected; otherwise targets are labelled
+# plain "Shared Voicemail". Script-scoped so Resolve-CallTarget doesn't need
+# another parameter threaded through every graph-building function.
+$script:GraphGroupLookup = $false
+$script:GroupNameCache   = @{}
 
 # ============================================================================
 # NODE STYLE DEFINITIONS  (palette driven by -StylePreset)
@@ -78,6 +100,7 @@ switch ($StylePreset) {
             "Title"           = "text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontFamily=Segoe UI;fontStyle=1;fontColor=#000000;"
             "Greeting"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFFACD;strokeColor=#A0800A;strokeWidth=2;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
             "Schedule"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#C8E6FF;strokeColor=#004C99;strokeWidth=2;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
+            "QueueSettings"   = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#CCF2CC;strokeColor=#003D00;strokeWidth=2;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
         }
         $EdgeStyles = @{
             "BusinessHours"    = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=3;fontFamily=Segoe UI;fontSize=10;"
@@ -87,6 +110,7 @@ switch ($StylePreset) {
             "TimeoutOverflow"  = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#C84B00;strokeWidth=2;dashed=1;fontFamily=Segoe UI;fontSize=10;"
             "Greeting"         = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#A0800A;strokeWidth=2;dashed=1;dashPattern=3 3;fontFamily=Segoe UI;fontSize=9;"
             "Schedule"         = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#004C99;strokeWidth=2;dashed=1;dashPattern=3 3;fontFamily=Segoe UI;fontSize=9;"
+            "QueueSettings"    = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#003D00;strokeWidth=2;dashed=1;dashPattern=3 3;fontFamily=Segoe UI;fontSize=9;"
         }
     }
     "Monochrome" {
@@ -104,6 +128,7 @@ switch ($StylePreset) {
             "Title"           = "text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontFamily=Segoe UI;fontStyle=1;fontColor=#000000;"
             "Greeting"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#F0F0F0;strokeColor=#555555;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
             "Schedule"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#E0E0E0;strokeColor=#333333;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
+            "QueueSettings"   = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#F7F7F7;strokeColor=#404040;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
         }
         $EdgeStyles = @{
             "BusinessHours"    = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=2;fontFamily=Segoe UI;fontSize=10;"
@@ -113,6 +138,7 @@ switch ($StylePreset) {
             "TimeoutOverflow"  = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#888888;strokeWidth=1;dashed=1;fontFamily=Segoe UI;fontSize=10;"
             "Greeting"         = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#888888;strokeWidth=1;dashed=1;dashPattern=3 3;fontFamily=Segoe UI;fontSize=9;"
             "Schedule"         = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#555555;strokeWidth=1;dashed=1;dashPattern=3 3;fontFamily=Segoe UI;fontSize=9;"
+            "QueueSettings"    = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#404040;strokeWidth=1;dashed=1;dashPattern=3 3;fontFamily=Segoe UI;fontSize=9;"
         }
     }
     default {
@@ -131,6 +157,7 @@ switch ($StylePreset) {
             "Title"           = "text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontFamily=Segoe UI;fontStyle=1;fontColor=#333333;"
             "Greeting"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
             "Schedule"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
+            "QueueSettings"   = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#E2EFDA;strokeColor=#548235;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
         }
         $EdgeStyles = @{
             "BusinessHours"    = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#666666;strokeWidth=2;fontFamily=Segoe UI;fontSize=10;"
@@ -140,6 +167,7 @@ switch ($StylePreset) {
             "TimeoutOverflow"  = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#ED7D31;strokeWidth=1;dashed=1;fontFamily=Segoe UI;fontSize=10;"
             "Greeting"         = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D6B656;strokeWidth=1;dashed=1;dashPattern=3 3;fontFamily=Segoe UI;fontSize=9;"
             "Schedule"         = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6C8EBF;strokeWidth=1;dashed=1;dashPattern=3 3;fontFamily=Segoe UI;fontSize=9;"
+            "QueueSettings"    = "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#548235;strokeWidth=1;dashed=1;dashPattern=3 3;fontFamily=Segoe UI;fontSize=9;"
         }
     }
 }
@@ -158,6 +186,7 @@ $NodeSizes = @{
     "Title"           = @{ Width = 400; Height = 30 }
     "Greeting"        = @{ Width = 280; Height = 80 }
     "Schedule"        = @{ Width = 220; Height = 160 }
+    "QueueSettings"   = @{ Width = 240; Height = 140 }
 }
 
 # ============================================================================
@@ -241,6 +270,110 @@ function Get-CallFlowGreeting {
     }
 
     return $null
+}
+
+function Get-UserDisplayName {
+<#
+.SYNOPSIS
+    Resolves a user ObjectId to a display name, cached in $UserCache.
+#>
+    param([string]$UserId, [hashtable]$UserCache)
+
+    if ($UserCache.ContainsKey($UserId)) { return $UserCache[$UserId] }
+    try {
+        $displayName = (Get-CsOnlineUser -Identity $UserId -ErrorAction Stop).DisplayName
+    } catch {
+        $displayName = "User ($UserId)"
+    }
+    $UserCache[$UserId] = $displayName
+    return $displayName
+}
+
+function Get-SharedVoicemailLabel {
+<#
+.SYNOPSIS
+    Returns "Shared Voicemail: <group name>" when the Microsoft 365 group can be
+    resolved through an existing Microsoft Graph session, else "Shared Voicemail".
+.NOTES
+    A permissions failure (no Group.Read.All consent) disables further lookups
+    for the rest of the run, so one missing scope costs one failed call, not one
+    per voicemail target.
+#>
+    param([string]$GroupId)
+
+    if (-not $GroupId) { return "Shared Voicemail" }
+    if (-not $script:GroupNameCache.ContainsKey($GroupId)) {
+        if (-not $script:GraphGroupLookup) { return "Shared Voicemail" }
+        $name = $null
+        try {
+            $name = (Get-MgGroup -GroupId $GroupId -Property DisplayName -ErrorAction Stop).DisplayName
+        } catch {
+            if ($_.Exception.Message -match 'Authorization|Forbidden|Insufficient privileges|Access.*denied') {
+                Write-Host "       [i] Graph can't read groups (missing Group.Read.All?); shared voicemail names won't be shown." -ForegroundColor DarkYellow
+                $script:GraphGroupLookup = $false
+            }
+        }
+        $script:GroupNameCache[$GroupId] = $name
+    }
+    $groupName = $script:GroupNameCache[$GroupId]
+    if ($groupName) { return "Shared Voicemail: $groupName" }
+    return "Shared Voicemail"
+}
+
+function Get-QueueSettingsSummary {
+<#
+.SYNOPSIS
+    Builds the HTML label for a Call Queue's settings note: agent sources, alert
+    time, presence-based routing, opt-out, conference mode, callback, greeting,
+    and music on hold. Returns already-escaped HTML.
+#>
+    param([object]$CallQueue)
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    [void]$lines.Add("<b>&#x2699; Queue Settings</b>")
+
+    if ($CallQueue.ChannelId) {
+        $agentSource = "Teams channel"
+    } else {
+        $parts = @()
+        $userCount  = if ($CallQueue.Users) { @($CallQueue.Users).Count } else { 0 }
+        $groupCount = if ($CallQueue.DistributionLists) { @($CallQueue.DistributionLists).Count } else { 0 }
+        if ($userCount -gt 0)  { $parts += "$userCount user$(if ($userCount -ne 1) { 's' })" }
+        if ($groupCount -gt 0) { $parts += "$groupCount group$(if ($groupCount -ne 1) { 's' })" }
+        $agentSource = if ($parts) { $parts -join ', ' } else { "None" }
+    }
+    [void]$lines.Add("Agents from: $agentSource")
+    if ($null -ne $CallQueue.AgentAlertTime) { [void]$lines.Add("Agent alert time: $($CallQueue.AgentAlertTime)s") }
+    [void]$lines.Add("Presence-based routing: $(if ($CallQueue.PresenceBasedRouting -eq $true) { 'On' } else { 'Off' })")
+    [void]$lines.Add("Agent opt-out: $(if ($CallQueue.AllowOptOut -eq $true) { 'Allowed' } else { 'Not allowed' })")
+    [void]$lines.Add("Conference mode: $(if ($CallQueue.ConferenceMode -eq $true) { 'On' } else { 'Off' })")
+
+    if ($CallQueue.IsCallbackEnabled -eq $true) {
+        $cb = "Callback: Press $(Get-DtmfDisplayKey "$($CallQueue.CallbackRequestDtmf)")"
+        $conds = @()
+        if ($CallQueue.WaitTimeBeforeOfferingCallbackInSecond)          { $conds += "after $($CallQueue.WaitTimeBeforeOfferingCallbackInSecond)s" }
+        if ($CallQueue.NumberOfCallsInQueueBeforeOfferingCallback)      { $conds += "$($CallQueue.NumberOfCallsInQueueBeforeOfferingCallback)+ queued" }
+        if ($CallQueue.CallToAgentRatioThresholdBeforeOfferingCallback) { $conds += "ratio $($CallQueue.CallToAgentRatioThresholdBeforeOfferingCallback)" }
+        if ($conds) { $cb += " ($($conds -join ', '))" }
+        [void]$lines.Add($cb)
+    } else {
+        [void]$lines.Add("Callback: Off")
+    }
+
+    if ($CallQueue.WelcomeTextToSpeechPrompt) {
+        $tts = [string]$CallQueue.WelcomeTextToSpeechPrompt
+        if ($tts.Length -gt 60) { $tts = $tts.Substring(0, 57) + "..." }
+        [void]$lines.Add("Greeting: <i>&quot;$(Escape-XmlString $tts)&quot;</i>")
+    } elseif ($CallQueue.WelcomeMusicAudioFileId) {
+        [void]$lines.Add("Greeting: Audio file")
+    } else {
+        [void]$lines.Add("Greeting: None")
+    }
+
+    $moh = if ($CallQueue.UseDefaultMusicOnHold -eq $false -and $CallQueue.MusicOnHoldAudioFileId) { "Custom audio file" } else { "Default" }
+    [void]$lines.Add("Music on hold: $moh")
+
+    return ($lines -join "<br/>")
 }
 
 function ConvertTo-SafeDateTime {
@@ -403,6 +536,9 @@ function Resolve-CallTarget {
     timeout/overflow surfaces it as an Action of "SharedVoicemail"/"Voicemail"
     with a target Type of "Mailbox". Both forms are mapped to SharedVoicemail so
     a CQ voicemail target doesn't fall through to "Unknown (MailBox)".
+
+    A CQ action of "Voicemail" (as opposed to "SharedVoicemail") is a *user's*
+    personal voicemail and resolves to Type "Voicemail" with the user's name.
 .OUTPUTS
     Hashtable with keys: DisplayName, Type, LinkedId
 #>
@@ -421,12 +557,20 @@ function Resolve-CallTarget {
         return @{ DisplayName = "Disconnect"; Type = "Disconnect"; LinkedId = $null }
     }
 
+    # Call Queue "Voicemail" action = a user's personal voicemail (target is
+    # the user). Only treated as personal when the target really is a user, so
+    # anything unexpected still falls through to the shared-voicemail handling.
+    if ($Action -eq 'Voicemail' -and $CallTarget -and "$($CallTarget.Type)" -eq 'User') {
+        $userName = Get-UserDisplayName -UserId $CallTarget.Id -UserCache $UserCache
+        return @{ DisplayName = "Voicemail: $userName"; Type = "Voicemail"; LinkedId = $CallTarget.Id }
+    }
+
     # Call Queue timeout/overflow to shared voicemail arrives as an Action of
-    # "SharedVoicemail" (or "Voicemail") rather than a distinct target Type, so
-    # key off the action before inspecting the target type.
+    # "SharedVoicemail" rather than a distinct target Type, so key off the
+    # action before inspecting the target type.
     if ($Action -match 'voicemail') {
         $vmId = if ($CallTarget) { $CallTarget.Id } else { $null }
-        return @{ DisplayName = "Shared Voicemail"; Type = "SharedVoicemail"; LinkedId = $vmId }
+        return @{ DisplayName = (Get-SharedVoicemailLabel -GroupId $vmId); Type = "SharedVoicemail"; LinkedId = $vmId }
     }
 
     if ($null -eq $CallTarget) {
@@ -485,20 +629,7 @@ function Resolve-CallTarget {
             return @{ DisplayName = "Unknown Voice App ($targetId)"; Type = "Unknown"; LinkedId = $null }
         }
         "User" {
-            if ($UserCache.ContainsKey($targetId)) {
-                $displayName = $UserCache[$targetId]
-            }
-            else {
-                try {
-                    $user = Get-CsOnlineUser -Identity $targetId -ErrorAction Stop
-                    $displayName = $user.DisplayName
-                    $UserCache[$targetId] = $displayName
-                }
-                catch {
-                    $displayName = "User ($targetId)"
-                    $UserCache[$targetId] = $displayName
-                }
-            }
+            $displayName = Get-UserDisplayName -UserId $targetId -UserCache $UserCache
             return @{ DisplayName = $displayName; Type = "User"; LinkedId = $targetId }
         }
         "ExternalPstn" {
@@ -506,7 +637,7 @@ function Resolve-CallTarget {
             return @{ DisplayName = "External $phoneNumber"; Type = "ExternalPstn"; LinkedId = $null }
         }
         { $_ -in @("SharedVoicemail", "Mailbox") } {
-            return @{ DisplayName = "Shared Voicemail"; Type = "SharedVoicemail"; LinkedId = $targetId }
+            return @{ DisplayName = (Get-SharedVoicemailLabel -GroupId $targetId); Type = "SharedVoicemail"; LinkedId = $targetId }
         }
         default {
             return @{ DisplayName = "Unknown ($targetType)"; Type = "Unknown"; LinkedId = $null }
@@ -518,11 +649,16 @@ function Add-DiagramNode {
 <#
 .SYNOPSIS
     Creates a node hashtable and adds it to the node collection. Returns the assigned CellId.
+.PARAMETER Link
+    Optional draw.io link (e.g. "data:page/id,<pageId>") making the node clickable.
+.PARAMETER Tooltip
+    Optional hover text, shown alongside a Link.
 #>
     param(
         [string]$NodeId, [string]$Label, [string]$Type,
         [int]$Tier, [int]$BranchIndex, [int]$PositionInBranch, [string]$ParentNodeId,
-        [ref]$Nodes, [ref]$NodeMap, [ref]$NextCellId, [ref]$DefinedNodes
+        [ref]$Nodes, [ref]$NodeMap, [ref]$NextCellId, [ref]$DefinedNodes,
+        [string]$Link, [string]$Tooltip
     )
 
     if ($DefinedNodes.Value.Contains($NodeId)) {
@@ -543,6 +679,7 @@ function Add-DiagramNode {
         Style = $style; Width = $size.Width; Height = $size.Height
         Tier = $Tier; BranchIndex = $BranchIndex; PositionInBranch = $PositionInBranch
         ParentNodeId = $ParentNodeId; X = 0; Y = 0
+        Link = $Link; Tooltip = $Tooltip
     }
 
     [void]$Nodes.Value.Add($node)
@@ -624,9 +761,18 @@ function Resolve-AndAddTargetNode {
                 $targetNodeId = "AA_$(Sanitise-NodeId $Target.LinkedId)_b$BranchIndex"
             }
             if (-not $DefinedNodes.Value.Contains($targetNodeId)) {
-                Add-DiagramNode -NodeId $targetNodeId -Label "<b>$(Escape-XmlString $Target.DisplayName)</b>" -Type "AA" `
+                # A nested AA links to its own page in _AllCallFlows.drawio
+                # (page ids are "page_<sanitised identity>", see MAIN SCRIPT).
+                $link = ""; $tooltip = ""; $label = "<b>$(Escape-XmlString $Target.DisplayName)</b>"
+                if ($Target.LinkedId -and $Target.LinkedId -ne $CurrentAAIdentity) {
+                    $link = "data:page/id,page_$(Sanitise-NodeId $Target.LinkedId)"
+                    $tooltip = "Open the $($Target.DisplayName) call flow (in _AllCallFlows.drawio)"
+                    $label += "<br/><font style=&quot;font-size:9px&quot;>&#x2197; open call flow</font>"
+                }
+                Add-DiagramNode -NodeId $targetNodeId -Label $label -Type "AA" `
                     -Tier $Tier -BranchIndex $BranchIndex -PositionInBranch $PositionInBranch -ParentNodeId $ParentNodeId `
-                    -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
+                    -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes `
+                    -Link $link -Tooltip $tooltip | Out-Null
             }
         }
         "CQ" {
@@ -660,10 +806,12 @@ function Resolve-AndAddTargetNode {
                     -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
             }
         }
-        "SharedVoicemail" {
+        { $_ -in @("SharedVoicemail", "Voicemail") } {
+            # Shared (group) and personal (user) voicemail share the voicemail shape;
+            # the label says which.
             $targetNodeId = "${DisambiguationKey}_vm"
             if (-not $DefinedNodes.Value.Contains($targetNodeId)) {
-                Add-DiagramNode -NodeId $targetNodeId -Label "Shared Voicemail" -Type "SharedVoicemail" `
+                Add-DiagramNode -NodeId $targetNodeId -Label (Escape-XmlString $Target.DisplayName) -Type "SharedVoicemail" `
                     -Tier $Tier -BranchIndex $BranchIndex -PositionInBranch $PositionInBranch -ParentNodeId $ParentNodeId `
                     -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
             }
@@ -721,6 +869,16 @@ function Build-CallQueueNodes {
         -Tier $Tier -BranchIndex $BranchIndex -PositionInBranch $PositionInBranch `
         -ParentNodeId $ParentNodeId `
         -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
+
+    # Settings note, drawn to the left of the queue (greetings go on the right)
+    if (-not $HideQueueSettings) {
+        $settingsNodeId = "${CQNodeId}_settings"
+        Add-DiagramNode -NodeId $settingsNodeId -Label (Get-QueueSettingsSummary -CallQueue $CallQueue) -Type "QueueSettings" `
+            -Tier $Tier -BranchIndex $BranchIndex -PositionInBranch 98 -ParentNodeId $CQNodeId `
+            -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
+        Add-DiagramEdge -SourceNodeId $CQNodeId -TargetNodeId $settingsNodeId `
+            -Label "" -StyleKey "QueueSettings" -Edges $Edges -NextCellId $NextCellId | Out-Null
+    }
 
     # Thresholds of 0 are valid (e.g. overflow every call immediately), so only
     # a missing value is shown as N/A.
@@ -1023,7 +1181,7 @@ function Calculate-NodePositions {
 
     foreach ($node in $Nodes.Value) {
         if ($node.Type -eq "Title") { [void]$titleNodes.Add($node); continue }
-        if ($node.Type -in @("Greeting","Schedule")) { continue }
+        if ($node.Type -in @("Greeting","Schedule","QueueSettings")) { continue }
         switch ($node.Tier) {
             0 { [void]$tier0.Add($node) }
             1 { [void]$tier1.Add($node) }
@@ -1038,11 +1196,16 @@ function Calculate-NodePositions {
     foreach ($n in $Nodes.Value) { $nodeById[$n.NodeId] = $n }
 
     $greetingByParent = @{}
+    $settingsByParent = @{}
     foreach ($n in $Nodes.Value) {
         if ($n.Type -eq "Greeting" -and -not $greetingByParent.ContainsKey($n.ParentNodeId)) {
             $greetingByParent[$n.ParentNodeId] = $n
         }
+        if ($n.Type -eq "QueueSettings" -and -not $settingsByParent.ContainsKey($n.ParentNodeId)) {
+            $settingsByParent[$n.ParentNodeId] = $n
+        }
     }
+    $noteGap = 15
 
     $tier1Branches = @{}
     foreach ($n in $tier1) {
@@ -1058,7 +1221,7 @@ function Calculate-NodePositions {
     # hangs below its parent as a subtree (see Measure-Subtree/Place-Subtree).
     $isHanging = @{}
     foreach ($n in $Nodes.Value) {
-        if ($n.Type -in @("Title","Greeting","Schedule")) { continue }
+        if ($n.Type -in @("Title","Greeting","Schedule","QueueSettings")) { continue }
         if ($n.Tier -ge 3 -or $n.NodeId -match '_(timeout|overflow|noagent)$') { $isHanging[$n.NodeId] = $true }
     }
 
@@ -1072,14 +1235,21 @@ function Calculate-NodePositions {
     }
 
     # Subtree extent relative to the node's own X: Left <= 0, Right >= Width.
-    # Children sit side by side (in PositionInBranch order: timeout, overflow,
-    # no-agents) with each child's full subtree width reserved, and the row is
-    # centred under the parent, so nested queues never overlap each other.
+    # Includes the node's own notes (queue settings on the left, greeting on
+    # the right). Children sit side by side (in PositionInBranch order:
+    # timeout, overflow, no-agents) with each child's full subtree width
+    # reserved, and the row is centred under the parent, so nested queues
+    # never overlap each other.
     $subtreeExtent = @{}
     $childRelX = @{}
     function Measure-Subtree([hashtable]$node) {
         if ($subtreeExtent.ContainsKey($node.NodeId)) { return $subtreeExtent[$node.NodeId] }
-        $subtreeExtent[$node.NodeId] = @{ Left = 0; Right = $node.Width }   # recursion guard
+        $baseLeft = 0; $baseRight = $node.Width
+        $settingsNote = $settingsByParent[$node.NodeId]
+        if ($settingsNote) { $baseLeft = -($noteGap + $settingsNote.Width) }
+        $greetingNote = $greetingByParent[$node.NodeId]
+        if ($greetingNote) { $baseRight = $node.Width + $noteGap + $greetingNote.Width }
+        $subtreeExtent[$node.NodeId] = @{ Left = $baseLeft; Right = $baseRight }   # recursion guard
 
         $kids = @()
         if ($hangingChildren.ContainsKey($node.NodeId)) {
@@ -1106,7 +1276,7 @@ function Calculate-NodePositions {
         $rowMid = (($rel[$first.NodeId] + $first.Width / 2) + ($rel[$last.NodeId] + $last.Width / 2)) / 2
         $shift = ($node.Width / 2) - $rowMid
 
-        $left = 0; $right = $node.Width
+        $left = $baseLeft; $right = $baseRight
         foreach ($k in $kids) {
             $rel[$k.NodeId] += $shift
             $childRelX[$k.NodeId] = $rel[$k.NodeId]
@@ -1124,9 +1294,13 @@ function Calculate-NodePositions {
         if ($placedSubtree.ContainsKey($node.NodeId)) { return }
         $placedSubtree[$node.NodeId] = $true
         if (-not $hangingChildren.ContainsKey($node.NodeId)) { return }
+        # Drop below the settings note too, which is taller than the queue
+        $childY = $node.Y + $node.Height + $subtreeYGap
+        $settingsNote = $settingsByParent[$node.NodeId]
+        if ($settingsNote) { $childY = [Math]::Max($childY, $node.Y + $settingsNote.Height + 40) }
         foreach ($k in $hangingChildren[$node.NodeId]) {
             $k.X = [int]($node.X + $childRelX[$k.NodeId])
-            $k.Y = [int]($node.Y + $node.Height + $subtreeYGap)
+            $k.Y = [int]$childY
             Place-Subtree $k
         }
     }
@@ -1144,7 +1318,7 @@ function Calculate-NodePositions {
     # Footprint defines LeftOffset and RightOffset relative to the X coordinate.
     $footprints = @{}
     foreach ($n in $Nodes.Value) {
-        if ($n.Type -in @("Greeting","Schedule","Title") -or $isHanging.ContainsKey($n.NodeId)) {
+        if ($n.Type -in @("Greeting","Schedule","Title","QueueSettings") -or $isHanging.ContainsKey($n.NodeId)) {
             continue
         }
 
@@ -1267,7 +1441,7 @@ function Calculate-NodePositions {
 
     # 5. Hang CQ exception subtrees below their (now positioned) roots
     foreach ($n in $Nodes.Value) {
-        if ($n.Type -in @("Greeting","Schedule","Title") -or $isHanging.ContainsKey($n.NodeId)) { continue }
+        if ($n.Type -in @("Greeting","Schedule","Title","QueueSettings") -or $isHanging.ContainsKey($n.NodeId)) { continue }
         Place-Subtree $n
     }
     # Orphans (parent missing) - shouldn't happen, but keep them on the page
@@ -1283,7 +1457,7 @@ function Calculate-NodePositions {
     if ($scheduleNodes.Count -gt 0) {
         $flowMaxX = 0
         foreach ($node in $Nodes.Value) {
-            if ($node.Type -in @("Title","Schedule","Greeting")) {
+            if ($node.Type -in @("Title","Schedule","Greeting","QueueSettings")) {
                 continue
             }
             $r = $node.X + $node.Width
@@ -1312,7 +1486,16 @@ function Calculate-NodePositions {
         $n.Y = 10
     }
 
-    # 8. Position greeting notes
+    # 8. Position queue settings notes (left of their queue, top-aligned)
+    foreach ($sn in $settingsByParent.Values) {
+        $pn = $nodeById[$sn.ParentNodeId]
+        if ($pn) {
+            $sn.X = [int]($pn.X - $noteGap - $sn.Width)
+            $sn.Y = $pn.Y
+        }
+    }
+
+    # 8b. Position greeting notes
     $greetingNodes = $Nodes.Value | Where-Object { $_.Type -eq "Greeting" }
     foreach ($gn in $greetingNodes) {
         $pn = $nodeById[$gn.ParentNodeId]
@@ -1337,6 +1520,35 @@ function Calculate-NodePositions {
     return @{ PageWidth = [int][Math]::Max(1169, $maxX + 100); PageHeight = [int][Math]::Max(827, $maxY + 100) }
 }
 
+function Get-VertexXml {
+<#
+.SYNOPSIS
+    Renders one vertex hashtable (CellId, Label, Style, X, Y, Width, Height and
+    optional Link/Tooltip) as mxGraph XML. A linked vertex is wrapped in a
+    <UserObject>, which is how draw.io stores links and tooltips; the
+    UserObject carries the cell id so edges still resolve.
+#>
+    param([hashtable]$Node, [string]$Indent = "          ")
+
+    $geom = "$Indent  <mxGeometry x=""$($Node.X)"" y=""$($Node.Y)"" width=""$($Node.Width)"" height=""$($Node.Height)"" as=""geometry""/>"
+    $label = Escape-XmlString $Node.Label
+    if ($Node.Link) {
+        $tip = if ($Node.Tooltip) { " tooltip=""$(Escape-XmlString $Node.Tooltip)""" } else { "" }
+        return @(
+            "$Indent<UserObject label=""$label"" link=""$(Escape-XmlString $Node.Link)""$tip id=""$($Node.CellId)"">"
+            "$Indent  <mxCell style=""$($Node.Style)"" vertex=""1"" parent=""1"">"
+            "  $geom"
+            "$Indent  </mxCell>"
+            "$Indent</UserObject>"
+        ) -join [Environment]::NewLine
+    }
+    return @(
+        "$Indent<mxCell id=""$($Node.CellId)"" value=""$label"" style=""$($Node.Style)"" vertex=""1"" parent=""1"">"
+        $geom
+        "$Indent</mxCell>"
+    ) -join [Environment]::NewLine
+}
+
 function Build-DiagramXml {
 <#
 .SYNOPSIS
@@ -1355,10 +1567,7 @@ function Build-DiagramXml {
     [void]$sb.AppendLine("          <mxCell id=""1"" parent=""0""/>")
 
     foreach ($node in $Nodes) {
-        $safeLabel = Escape-XmlString $node.Label
-        [void]$sb.AppendLine("          <mxCell id=""$($node.CellId)"" value=""$safeLabel"" style=""$($node.Style)"" vertex=""1"" parent=""1"">")
-        [void]$sb.AppendLine("            <mxGeometry x=""$($node.X)"" y=""$($node.Y)"" width=""$($node.Width)"" height=""$($node.Height)"" as=""geometry""/>")
-        [void]$sb.AppendLine("          </mxCell>")
+        [void]$sb.AppendLine((Get-VertexXml -Node $node))
     }
 
     foreach ($edge in $Edges) {
@@ -1392,12 +1601,13 @@ function Build-LegendPage {
         @{ Label = "Menu (After Hours)"; Type = "MenuAfterHours" }
         @{ Label = "User"; Type = "User" }
         @{ Label = "External PSTN"; Type = "ExternalPstn" }
-        @{ Label = "Shared Voicemail"; Type = "SharedVoicemail" }
+        @{ Label = "Voicemail (Shared / Personal)"; Type = "SharedVoicemail" }
         @{ Label = "Disconnect"; Type = "Disconnect" }
         @{ Label = "Holiday"; Type = "Holiday" }
         @{ Label = "Timeout / Overflow / No Agents"; Type = "TimeoutOverflow" }
         @{ Label = "TTS / Audio Greeting"; Type = "Greeting" }
         @{ Label = "Business Hours Schedule"; Type = "Schedule" }
+        @{ Label = "Queue Settings"; Type = "QueueSettings" }
     )
 
     $cellId = 2; $nodes = [System.Collections.Generic.List[hashtable]]::new(); $y = 80
@@ -1474,7 +1684,7 @@ function Build-IndexPage {
     unrelated diagrams.
 .PARAMETER Diagrams
     The list of per-AA result hashtables (from Export-AADiagram), each
-    expected to have Name and PhoneNumbers.
+    expected to have Name, PhoneNumbers and PageId. Each row links to its page.
 #>
     param([string]$DiagramId = "index_page", [array]$Diagrams)
 
@@ -1497,7 +1707,8 @@ function Build-IndexPage {
         $phoneText = "No number assigned"
         if ($d.PhoneNumbers -and $d.PhoneNumbers.Count -gt 0) { $phoneText = $d.PhoneNumbers -join ', ' }
         $rowLabel = "<b>$(Escape-XmlString $d.Name)</b>&#160;&#8212;&#160;$(Escape-XmlString $phoneText)"
-        [void]$nodes.Add(@{ CellId = $cellId; Label = $rowLabel; Style = $rowStyle; X = 80; Y = $y; Width = 760; Height = 26 })
+        [void]$nodes.Add(@{ CellId = $cellId; Label = $rowLabel; Style = $rowStyle; X = 80; Y = $y; Width = 760; Height = 26
+            Link = "data:page/id,$($d.PageId)"; Tooltip = "Open $($d.Name)" })
         $cellId++
         $y += 30
     }
@@ -1511,9 +1722,7 @@ function Build-IndexPage {
     [void]$sb.AppendLine("          <mxCell id=""1"" parent=""0""/>")
 
     foreach ($node in $nodes) {
-        [void]$sb.AppendLine("          <mxCell id=""$($node.CellId)"" value=""$(Escape-XmlString $node.Label)"" style=""$($node.Style)"" vertex=""1"" parent=""1"">")
-        [void]$sb.AppendLine("            <mxGeometry x=""$($node.X)"" y=""$($node.Y)"" width=""$($node.Width)"" height=""$($node.Height)"" as=""geometry""/>")
-        [void]$sb.AppendLine("          </mxCell>")
+        [void]$sb.AppendLine((Get-VertexXml -Node $node))
     }
 
     [void]$sb.AppendLine("        </root>")
@@ -1631,6 +1840,7 @@ function Export-AADiagram {
 
     return @{
         Name          = $aa.Name
+        PageId        = "page_$(Sanitise-NodeId $aa.Identity)"
         DiagramXml    = $diagramXml
         NodeCount     = $nodes.Count
         EdgeCount     = $edges.Count
@@ -1645,7 +1855,7 @@ function Export-AADiagram {
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host " Teams Auto Attendant Call Flow Exporter"    -ForegroundColor Cyan
-Write-Host " Draw.io Diagram Generator v1.5"             -ForegroundColor Cyan
+Write-Host " Draw.io Diagram Generator v1.6"             -ForegroundColor Cyan
 Write-Host " Style Preset : $StylePreset"                -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
@@ -1660,6 +1870,22 @@ try {
     Write-Host "Please run 'Connect-MicrosoftTeams' first in your PowerShell session before executing this script." -ForegroundColor Yellow
     exit 1
 }
+
+# Optional: shared voicemail group names via an existing Microsoft Graph session.
+# Never connects or imports on its own - it only uses a session the admin already has.
+if ((Get-Command Get-MgContext -ErrorAction SilentlyContinue) -and (Get-Command Get-MgGroup -ErrorAction SilentlyContinue)) {
+    $mgContext = $null
+    try { $mgContext = Get-MgContext -ErrorAction Stop } catch { }
+    if ($mgContext) {
+        $script:GraphGroupLookup = $true
+        Write-Host "[+] Microsoft Graph session found - shared voicemail group names will be shown." -ForegroundColor Green
+    }
+}
+if (-not $script:GraphGroupLookup) {
+    Write-Host "[i] No Microsoft Graph session - shared voicemail shows without a group name." -ForegroundColor DarkGray
+    Write-Host "    (Optional: Connect-MgGraph -Scopes Group.Read.All before running to include them.)" -ForegroundColor DarkGray
+}
+
 $OutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
 if (-not (Test-Path $OutputPath)) {
     New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
@@ -1822,11 +2048,11 @@ $indexXml = Build-IndexPage -DiagramId "index_page" -Diagrams $allDiagrams
 $legendXml = Build-LegendPage -DiagramId "legend_page"
 [void]$combinedSb.AppendLine($legendXml)
 
-$pageCounter = 0
+# Page ids are derived from the AA identity so nested-AA nodes and index rows
+# can link to them ("data:page/id,page_<identity>").
 foreach ($diagram in $allDiagrams) {
-    $pageCounter++
     $pageName = Escape-XmlString $diagram.Name
-    [void]$combinedSb.AppendLine("  <diagram id=""page_$pageCounter"" name=""$pageName"">")
+    [void]$combinedSb.AppendLine("  <diagram id=""$($diagram.PageId)"" name=""$pageName"">")
     [void]$combinedSb.AppendLine($diagram.DiagramXml)
     [void]$combinedSb.AppendLine("  </diagram>")
 }
