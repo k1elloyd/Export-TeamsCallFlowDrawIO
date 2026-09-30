@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Export-TeamsCallFlowDrawIO.ps1
     Exports all Microsoft Teams Auto Attendants and Call Queues as draw.io diagrams.
@@ -692,7 +692,13 @@ function Resolve-AndAddTargetNode {
 function Build-CallQueueNodes {
 <#
 .SYNOPSIS
-    Builds draw.io nodes for a Call Queue including agents info, timeout, and overflow.
+    Builds draw.io nodes for a Call Queue including agents info and its three
+    exception-handling rules: timeout, overflow, and no-agents.
+.NOTES
+    Each exception becomes a child node suffixed _timeout / _overflow / _noagent
+    (pattern-matched by Calculate-NodePositions). "Disconnect"/"DisconnectWithBusy"
+    is drawn as a terminal Disconnect node; the no-agents rule is only drawn when
+    it does something other than the default "Queue" (keep the call in the queue).
 #>
     param(
         [object]$CallQueue, [string]$CQNodeId,
@@ -716,88 +722,64 @@ function Build-CallQueueNodes {
         -ParentNodeId $ParentNodeId `
         -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
 
+    # Thresholds of 0 are valid (e.g. overflow every call immediately), so only
+    # a missing value is shown as N/A.
+    $timeoutThreshold  = if ($null -ne $CallQueue.TimeoutThreshold)  { "$($CallQueue.TimeoutThreshold)s" } else { "N/A" }
+    $overflowThreshold = if ($null -ne $CallQueue.OverflowThreshold) { "$($CallQueue.OverflowThreshold) calls" } else { "N/A" }
+    $noAgentScope = switch ("$($CallQueue.NoAgentApplyTo)") {
+        "NewCalls" { "New calls" }
+        default    { "All calls" }
+    }
+
+    $exceptions = @(
+        @{ Suffix = "timeout";  EdgeLabel = "Timeout";   Caption = "Timeout ($timeoutThreshold)"
+           Action = $CallQueue.TimeoutAction;  Target = $CallQueue.TimeoutActionTarget }
+        @{ Suffix = "overflow"; EdgeLabel = "Overflow";  Caption = "Overflow ($overflowThreshold)"
+           Action = $CallQueue.OverflowAction; Target = $CallQueue.OverflowActionTarget }
+        @{ Suffix = "noagent";  EdgeLabel = "No Agents"; Caption = "No Agents ($noAgentScope)"
+           Action = $CallQueue.NoAgentAction;  Target = $CallQueue.NoAgentActionTarget }
+    )
+
     $childTier = $Tier + 1
     $childPos  = 0
 
-    # ---- Timeout ----
-    if ($CallQueue.TimeoutAction) {
-        $timeoutActionStr = $CallQueue.TimeoutAction.ToString()
-        $timeoutNodeId    = "${CQNodeId}_timeout"
-        $timeoutThreshold = $CallQueue.TimeoutThreshold
-        if (-not $timeoutThreshold) { $timeoutThreshold = "N/A" }
+    foreach ($ex in $exceptions) {
+        if (-not $ex.Action) { continue }
+        $actionStr = $ex.Action.ToString()
+        if ($actionStr -eq "Queue") { continue }   # no-agents default: call just waits in queue
 
-        if ($timeoutActionStr -ne "Disconnect") {
-            $timeoutTarget = Resolve-CallTarget -CallTarget $CallQueue.TimeoutActionTarget `
-                -Action $timeoutActionStr -ResourceAccountLookup $ResourceAccountLookup `
+        $childNodeId = "${CQNodeId}_$($ex.Suffix)"
+
+        if ($actionStr -in @("Disconnect", "DisconnectWithBusy")) {
+            Add-DiagramNode -NodeId $childNodeId -Label "$($ex.Caption)<br/>Disconnect" -Type "Disconnect" `
+                -Tier $childTier -BranchIndex $BranchIndex -PositionInBranch $childPos `
+                -ParentNodeId $CQNodeId `
+                -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
+        } else {
+            $target = Resolve-CallTarget -CallTarget $ex.Target `
+                -Action $actionStr -ResourceAccountLookup $ResourceAccountLookup `
                 -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
                 -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance
-            $timeoutLabel = "Timeout (${timeoutThreshold}s)<br/>$(Escape-XmlString $timeoutTarget.DisplayName)"
-            Add-DiagramNode -NodeId $timeoutNodeId -Label $timeoutLabel -Type "TimeoutOverflow" `
+            Add-DiagramNode -NodeId $childNodeId -Label "$($ex.Caption)<br/>$(Escape-XmlString $target.DisplayName)" -Type "TimeoutOverflow" `
                 -Tier $childTier -BranchIndex $BranchIndex -PositionInBranch $childPos `
                 -ParentNodeId $CQNodeId `
                 -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
 
             # Route downstream to target
-            $downstreamNodeId = Resolve-AndAddTargetNode -Target $timeoutTarget -DisambiguationKey $timeoutNodeId `
-                -Tier ($childTier + 1) -BranchIndex $BranchIndex -PositionInBranch 0 -ParentNodeId $timeoutNodeId `
+            $downstreamNodeId = Resolve-AndAddTargetNode -Target $target -DisambiguationKey $childNodeId `
+                -Tier ($childTier + 1) -BranchIndex $BranchIndex -PositionInBranch 0 -ParentNodeId $childNodeId `
                 -CurrentAAIdentity $CurrentAAIdentity `
                 -ResourceAccountLookup $ResourceAccountLookup -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
                 -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance `
                 -Nodes $Nodes -Edges $Edges -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes
             if ($downstreamNodeId -and $DefinedNodes.Value.Contains($downstreamNodeId)) {
-                Add-DiagramEdge -SourceNodeId $timeoutNodeId -TargetNodeId $downstreamNodeId `
+                Add-DiagramEdge -SourceNodeId $childNodeId -TargetNodeId $downstreamNodeId `
                     -Label "" -StyleKey "TimeoutOverflow" -Edges $Edges -NextCellId $NextCellId | Out-Null
             }
-        } else {
-            $timeoutLabel = "Timeout (${timeoutThreshold}s)<br/>Disconnect"
-            Add-DiagramNode -NodeId $timeoutNodeId -Label $timeoutLabel -Type "Disconnect" `
-                -Tier $childTier -BranchIndex $BranchIndex -PositionInBranch $childPos `
-                -ParentNodeId $CQNodeId `
-                -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
         }
-        Add-DiagramEdge -SourceNodeId $CQNodeId -TargetNodeId $timeoutNodeId `
-            -Label "Timeout" -StyleKey "TimeoutOverflow" -Edges $Edges -NextCellId $NextCellId | Out-Null
+        Add-DiagramEdge -SourceNodeId $CQNodeId -TargetNodeId $childNodeId `
+            -Label $ex.EdgeLabel -StyleKey "TimeoutOverflow" -Edges $Edges -NextCellId $NextCellId | Out-Null
         $childPos++
-    }
-
-    # ---- Overflow ----
-    if ($CallQueue.OverflowAction) {
-        $overflowActionStr = $CallQueue.OverflowAction.ToString()
-        $overflowNodeId    = "${CQNodeId}_overflow"
-        $overflowThreshold = $CallQueue.OverflowThreshold
-        if (-not $overflowThreshold) { $overflowThreshold = "N/A" }
-
-        if ($overflowActionStr -ne "Disconnect") {
-            $overflowTarget = Resolve-CallTarget -CallTarget $CallQueue.OverflowActionTarget `
-                -Action $overflowActionStr -ResourceAccountLookup $ResourceAccountLookup `
-                -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
-                -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance
-            $overflowLabel = "Overflow ($overflowThreshold calls)<br/>$(Escape-XmlString $overflowTarget.DisplayName)"
-            Add-DiagramNode -NodeId $overflowNodeId -Label $overflowLabel -Type "TimeoutOverflow" `
-                -Tier $childTier -BranchIndex $BranchIndex -PositionInBranch $childPos `
-                -ParentNodeId $CQNodeId `
-                -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
-
-            # Route downstream to target
-            $downstreamNodeId = Resolve-AndAddTargetNode -Target $overflowTarget -DisambiguationKey $overflowNodeId `
-                -Tier ($childTier + 1) -BranchIndex $BranchIndex -PositionInBranch 0 -ParentNodeId $overflowNodeId `
-                -CurrentAAIdentity $CurrentAAIdentity `
-                -ResourceAccountLookup $ResourceAccountLookup -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
-                -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance `
-                -Nodes $Nodes -Edges $Edges -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes
-            if ($downstreamNodeId -and $DefinedNodes.Value.Contains($downstreamNodeId)) {
-                Add-DiagramEdge -SourceNodeId $overflowNodeId -TargetNodeId $downstreamNodeId `
-                    -Label "" -StyleKey "TimeoutOverflow" -Edges $Edges -NextCellId $NextCellId | Out-Null
-            }
-        } else {
-            $overflowLabel = "Overflow ($overflowThreshold calls)<br/>Disconnect"
-            Add-DiagramNode -NodeId $overflowNodeId -Label $overflowLabel -Type "Disconnect" `
-                -Tier $childTier -BranchIndex $BranchIndex -PositionInBranch $childPos `
-                -ParentNodeId $CQNodeId `
-                -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
-        }
-        Add-DiagramEdge -SourceNodeId $CQNodeId -TargetNodeId $overflowNodeId `
-            -Label "Overflow" -StyleKey "TimeoutOverflow" -Edges $Edges -NextCellId $NextCellId | Out-Null
     }
 }
 
@@ -831,9 +813,13 @@ function Build-CallFlowNodes {
 
     $menuOptions = $menu.MenuOptions
     if ($null -eq $menuOptions) { return }
-    $hasIvrOptions = $menuOptions | Where-Object { $_.DtmfResponse -ne "Automatic" -or $_.Action -ne "DisconnectCall" }
+    # A flow whose only option is "Automatic" is a straight transfer/disconnect
+    # with no IVR, so it takes the direct-transfer path below rather than being
+    # drawn as a menu with a meaningless "Press Voice" connector. @() so .Count
+    # is reliable for a single match on Windows PowerShell 5.1.
+    $hasIvrOptions = @($menuOptions | Where-Object { $_.DtmfResponse.ToString() -ne "Automatic" })
 
-    if ($hasIvrOptions -and $hasIvrOptions.Count -gt 0) {
+    if ($hasIvrOptions.Count -gt 0) {
         $menuNodeId = "${flowPrefix}_menu"
 
         $menuLabel = switch ($FlowType) {
@@ -1028,12 +1014,11 @@ function Calculate-NodePositions {
     param([ref]$Nodes)
 
     $tierYPositions = @{ 0 = 60; 1 = 200; 2 = 380; 3 = 540 }
-    $branchGap = 160; $siblingGap = 50; $cqChildXOffset = 110; $cqChildYOffset = 140
+    $branchGap = 160; $siblingGap = 50; $subtreeGap = 30; $subtreeYGap = 80
 
     $tier0 = [System.Collections.Generic.List[hashtable]]::new()
     $tier1 = [System.Collections.Generic.List[hashtable]]::new()
     $tier2 = [System.Collections.Generic.List[hashtable]]::new()
-    $tier3 = [System.Collections.Generic.List[hashtable]]::new()
     $titleNodes = [System.Collections.Generic.List[hashtable]]::new()
 
     foreach ($node in $Nodes.Value) {
@@ -1043,7 +1028,6 @@ function Calculate-NodePositions {
             0 { [void]$tier0.Add($node) }
             1 { [void]$tier1.Add($node) }
             2 { [void]$tier2.Add($node) }
-            3 { [void]$tier3.Add($node) }
         }
     }
 
@@ -1068,10 +1052,88 @@ function Calculate-NodePositions {
         [void]$tier1Branches[$n.BranchIndex].Add($n)
     }
 
+    # "Hanging" nodes are everything below a Call Queue: its exception children
+    # (_timeout/_overflow/_noagent) and whatever those route to, however deep
+    # the chain of nested queues goes. They aren't laid out in tier rows; each
+    # hangs below its parent as a subtree (see Measure-Subtree/Place-Subtree).
+    $isHanging = @{}
+    foreach ($n in $Nodes.Value) {
+        if ($n.Type -in @("Title","Greeting","Schedule")) { continue }
+        if ($n.Tier -ge 3 -or $n.NodeId -match '_(timeout|overflow|noagent)$') { $isHanging[$n.NodeId] = $true }
+    }
+
+    $hangingChildren = @{}
+    foreach ($n in $Nodes.Value) {
+        if (-not $isHanging.ContainsKey($n.NodeId) -or -not $n.ParentNodeId) { continue }
+        if (-not $hangingChildren.ContainsKey($n.ParentNodeId)) {
+            $hangingChildren[$n.ParentNodeId] = [System.Collections.Generic.List[hashtable]]::new()
+        }
+        [void]$hangingChildren[$n.ParentNodeId].Add($n)
+    }
+
+    # Subtree extent relative to the node's own X: Left <= 0, Right >= Width.
+    # Children sit side by side (in PositionInBranch order: timeout, overflow,
+    # no-agents) with each child's full subtree width reserved, and the row is
+    # centred under the parent, so nested queues never overlap each other.
+    $subtreeExtent = @{}
+    $childRelX = @{}
+    function Measure-Subtree([hashtable]$node) {
+        if ($subtreeExtent.ContainsKey($node.NodeId)) { return $subtreeExtent[$node.NodeId] }
+        $subtreeExtent[$node.NodeId] = @{ Left = 0; Right = $node.Width }   # recursion guard
+
+        $kids = @()
+        if ($hangingChildren.ContainsKey($node.NodeId)) {
+            $kids = @($hangingChildren[$node.NodeId] | Sort-Object { $_.PositionInBranch })
+        }
+        if ($kids.Count -eq 0) { return $subtreeExtent[$node.NodeId] }
+
+        $kidExt = @{}
+        foreach ($k in $kids) { $kidExt[$k.NodeId] = Measure-Subtree $k }
+
+        $rel = @{}
+        for ($i = 0; $i -lt $kids.Count; $i++) {
+            $k = $kids[$i]
+            if ($i -eq 0) {
+                $rel[$k.NodeId] = -$kidExt[$k.NodeId].Left
+            } else {
+                $p = $kids[$i-1]
+                $rel[$k.NodeId] = $rel[$p.NodeId] + $kidExt[$p.NodeId].Right + $subtreeGap - $kidExt[$k.NodeId].Left
+            }
+        }
+
+        # Centre the row of child boxes (first to last) under the parent's centre
+        $first = $kids[0]; $last = $kids[-1]
+        $rowMid = (($rel[$first.NodeId] + $first.Width / 2) + ($rel[$last.NodeId] + $last.Width / 2)) / 2
+        $shift = ($node.Width / 2) - $rowMid
+
+        $left = 0; $right = $node.Width
+        foreach ($k in $kids) {
+            $rel[$k.NodeId] += $shift
+            $childRelX[$k.NodeId] = $rel[$k.NodeId]
+            $l = $rel[$k.NodeId] + $kidExt[$k.NodeId].Left
+            $r = $rel[$k.NodeId] + $kidExt[$k.NodeId].Right
+            if ($l -lt $left)  { $left = $l }
+            if ($r -gt $right) { $right = $r }
+        }
+        $subtreeExtent[$node.NodeId] = @{ Left = $left; Right = $right }
+        return $subtreeExtent[$node.NodeId]
+    }
+
+    $placedSubtree = @{}
+    function Place-Subtree([hashtable]$node) {
+        if ($placedSubtree.ContainsKey($node.NodeId)) { return }
+        $placedSubtree[$node.NodeId] = $true
+        if (-not $hangingChildren.ContainsKey($node.NodeId)) { return }
+        foreach ($k in $hangingChildren[$node.NodeId]) {
+            $k.X = [int]($node.X + $childRelX[$k.NodeId])
+            $k.Y = [int]($node.Y + $node.Height + $subtreeYGap)
+            Place-Subtree $k
+        }
+    }
+
     $tier2Branches = @{}
-    $cqChildNodes = [System.Collections.Generic.List[hashtable]]::new()
     foreach ($n in $tier2) {
-        if ($n.NodeId -match '_(timeout|overflow)$') { [void]$cqChildNodes.Add($n); continue }
+        if ($isHanging.ContainsKey($n.NodeId)) { continue }
         if (-not $tier2Branches.ContainsKey($n.BranchIndex)) {
             $tier2Branches[$n.BranchIndex] = [System.Collections.Generic.List[hashtable]]::new()
         }
@@ -1082,31 +1144,19 @@ function Calculate-NodePositions {
     # Footprint defines LeftOffset and RightOffset relative to the X coordinate.
     $footprints = @{}
     foreach ($n in $Nodes.Value) {
-        if ($n.Type -in @("Greeting","Schedule","Title") -or $n.NodeId -match '_(timeout|overflow)$') {
+        if ($n.Type -in @("Greeting","Schedule","Title") -or $isHanging.ContainsKey($n.NodeId)) {
             continue
         }
 
-        $leftOffset = 0
-        $rightOffset = $n.Width
+        # Reserve room for everything hanging below (CQ exception chains)
+        $ext = Measure-Subtree $n
+        $leftOffset = $ext.Left
+        $rightOffset = $ext.Right
 
         # Check for greeting note
         $greeting = $greetingByParent[$n.NodeId]
         if ($greeting) {
             $rightOffset = [Math]::Max($rightOffset, $n.Width + 15 + $greeting.Width)
-        }
-
-        # Check for CQ children (Timeout and Overflow)
-        if ($n.Type -eq "CQ") {
-            $timeout = $nodeById["$($n.NodeId)_timeout"]
-            if ($timeout) {
-                $tOffset = [int](($n.Width / 2) - $cqChildXOffset - ($timeout.Width / 2))
-                if ($tOffset -lt $leftOffset) { $leftOffset = $tOffset }
-            }
-            $overflow = $nodeById["$($n.NodeId)_overflow"]
-            if ($overflow) {
-                $oOffset = [int](($n.Width / 2) + $cqChildXOffset + ($overflow.Width / 2))
-                if ($oOffset -gt $rightOffset) { $rightOffset = $oOffset }
-            }
         }
 
         $footprints[$n.NodeId] = @{
@@ -1215,7 +1265,20 @@ function Calculate-NodePositions {
         $n.Y = $tierYPositions[0]
     }
 
-    # 5. Position schedule note on the far-right sidebar
+    # 5. Hang CQ exception subtrees below their (now positioned) roots
+    foreach ($n in $Nodes.Value) {
+        if ($n.Type -in @("Greeting","Schedule","Title") -or $isHanging.ContainsKey($n.NodeId)) { continue }
+        Place-Subtree $n
+    }
+    # Orphans (parent missing) - shouldn't happen, but keep them on the page
+    foreach ($n in $Nodes.Value) {
+        if ($isHanging.ContainsKey($n.NodeId) -and -not $placedSubtree.ContainsKey($n.NodeId)) {
+            $n.X = $startX; $n.Y = $tierYPositions[3]
+            Place-Subtree $n
+        }
+    }
+
+    # 6. Position schedule note on the far-right sidebar (after subtrees, so it clears them)
     $scheduleNodes = $Nodes.Value | Where-Object { $_.Type -eq "Schedule" }
     if ($scheduleNodes.Count -gt 0) {
         $flowMaxX = 0
@@ -1240,37 +1303,6 @@ function Calculate-NodePositions {
         foreach ($sn in $scheduleNodes) {
             $sn.X = $flowMaxX + 80
             $sn.Y = 60 # Align vertically with the root AA node
-        }
-    }
-
-    # 6. Position CQ children (timeout and overflow)
-    $allCqChildren = [System.Collections.Generic.List[hashtable]]::new()
-    foreach ($n in $tier3) { [void]$allCqChildren.Add($n) }
-    foreach ($n in $cqChildNodes) { [void]$allCqChildren.Add($n) }
-
-    foreach ($n in $allCqChildren) {
-        $pn = $nodeById[$n.ParentNodeId]
-        if ($pn) {
-            $bx = $pn.X + ($pn.Width / 2)
-            if ($n.NodeId -match '_timeout$') {
-                $n.X = [int]($bx - $cqChildXOffset - ($n.Width / 2))
-            } else {
-                $n.X = [int]($bx + $cqChildXOffset - ($n.Width / 2))
-            }
-            $n.Y = $pn.Y + $cqChildYOffset
-        } else {
-            $n.X = $startX
-            $n.Y = $tierYPositions[3]
-        }
-    }
-
-    # 6.5 Position any remaining downstream nested nodes (Tiers >= 3)
-    $remainingNodes = $Nodes.Value | Where-Object { $_.X -eq 0 -and $_.Y -eq 0 -and $_.Type -notin @("Title","Greeting","Schedule") } | Sort-Object { $_.Tier }
-    foreach ($n in $remainingNodes) {
-        $pn = $nodeById[$n.ParentNodeId]
-        if ($pn) {
-            $n.X = [int]($pn.X + ($pn.Width / 2) - ($n.Width / 2))
-            $n.Y = [int]($pn.Y + $pn.Height + 70)
         }
     }
 
@@ -1363,7 +1395,7 @@ function Build-LegendPage {
         @{ Label = "Shared Voicemail"; Type = "SharedVoicemail" }
         @{ Label = "Disconnect"; Type = "Disconnect" }
         @{ Label = "Holiday"; Type = "Holiday" }
-        @{ Label = "Timeout / Overflow"; Type = "TimeoutOverflow" }
+        @{ Label = "Timeout / Overflow / No Agents"; Type = "TimeoutOverflow" }
         @{ Label = "TTS / Audio Greeting"; Type = "Greeting" }
         @{ Label = "Business Hours Schedule"; Type = "Schedule" }
     )
@@ -1388,7 +1420,7 @@ function Build-LegendPage {
         @{ Label = "After Hours"; Color = "#2E75B6"; Dashed = "0" }
         @{ Label = "Holiday"; Color = "#BF8F00"; Dashed = "1" }
         @{ Label = "Menu Option"; Color = "#333333"; Dashed = "0" }
-        @{ Label = "Timeout / Overflow"; Color = "#ED7D31"; Dashed = "1" }
+        @{ Label = "Timeout / Overflow / No Agents"; Color = "#ED7D31"; Dashed = "1" }
         @{ Label = "Greeting"; Color = "#D6B656"; Dashed = "1" }
         @{ Label = "Schedule"; Color = "#6C8EBF"; Dashed = "1" }
     )
