@@ -692,10 +692,18 @@ function Add-DiagramEdge {
 <#
 .SYNOPSIS
     Creates an edge hashtable and adds it to the edge collection. Returns the assigned CellId.
+.PARAMETER StyleSuffix
+    Extra mxGraph style (e.g. fixed exit/entry points) appended to the StyleKey style.
+.PARAMETER RouteDown
+    Route the edge out of the source's bottom and into the target's top, with
+    its horizontal jog just above the target (waypoints are computed from the
+    laid-out positions in Build-DiagramXml). Used for queue exception edges so
+    they run below the queue's settings note instead of through it.
 #>
     param(
         [string]$SourceNodeId, [string]$TargetNodeId, [string]$Label, [string]$StyleKey,
-        [ref]$Edges, [ref]$NextCellId
+        [ref]$Edges, [ref]$NextCellId,
+        [string]$StyleSuffix, [switch]$RouteDown
     )
 
     $cellId = $NextCellId.Value
@@ -703,10 +711,11 @@ function Add-DiagramEdge {
 
     $style = $EdgeStyles[$StyleKey]
     if (-not $style) { $style = $EdgeStyles["BusinessHours"] }
+    if ($StyleSuffix) { $style += $StyleSuffix }
 
     $edge = @{
         CellId = $cellId; SourceNodeId = $SourceNodeId; TargetNodeId = $TargetNodeId
-        Label = $Label; Style = $style
+        Label = $Label; Style = $style; RouteDown = [bool]$RouteDown
     }
 
     [void]$Edges.Value.Add($edge)
@@ -877,7 +886,8 @@ function Build-CallQueueNodes {
             -Tier $Tier -BranchIndex $BranchIndex -PositionInBranch 98 -ParentNodeId $CQNodeId `
             -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
         Add-DiagramEdge -SourceNodeId $CQNodeId -TargetNodeId $settingsNodeId `
-            -Label "" -StyleKey "QueueSettings" -Edges $Edges -NextCellId $NextCellId | Out-Null
+            -Label "" -StyleKey "QueueSettings" -Edges $Edges -NextCellId $NextCellId `
+            -StyleSuffix "exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0;entryDx=0;entryDy=$([int]($NodeSizes['CQ'].Height / 2));" | Out-Null
     }
 
     # Thresholds of 0 are valid (e.g. overflow every call immediately), so only
@@ -932,11 +942,11 @@ function Build-CallQueueNodes {
                 -Nodes $Nodes -Edges $Edges -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes
             if ($downstreamNodeId -and $DefinedNodes.Value.Contains($downstreamNodeId)) {
                 Add-DiagramEdge -SourceNodeId $childNodeId -TargetNodeId $downstreamNodeId `
-                    -Label "" -StyleKey "TimeoutOverflow" -Edges $Edges -NextCellId $NextCellId | Out-Null
+                    -Label "" -StyleKey "TimeoutOverflow" -Edges $Edges -NextCellId $NextCellId -RouteDown | Out-Null
             }
         }
         Add-DiagramEdge -SourceNodeId $CQNodeId -TargetNodeId $childNodeId `
-            -Label $ex.EdgeLabel -StyleKey "TimeoutOverflow" -Edges $Edges -NextCellId $NextCellId | Out-Null
+            -Label $ex.EdgeLabel -StyleKey "TimeoutOverflow" -Edges $Edges -NextCellId $NextCellId -RouteDown | Out-Null
         $childPos++
     }
 }
@@ -1570,14 +1580,37 @@ function Build-DiagramXml {
         [void]$sb.AppendLine((Get-VertexXml -Node $node))
     }
 
+    $nodeById = @{}
+    foreach ($n in $Nodes) { $nodeById[$n.NodeId] = $n }
+
     foreach ($edge in $Edges) {
         $sc = ""; $tc = ""
         if ($NodeMap.ContainsKey($edge.SourceNodeId)) { $sc = $NodeMap[$edge.SourceNodeId] }
         if ($NodeMap.ContainsKey($edge.TargetNodeId)) { $tc = $NodeMap[$edge.TargetNodeId] }
         if ($sc -and $tc) {
             $sl = Escape-XmlString $edge.Label
-            [void]$sb.AppendLine("          <mxCell id=""$($edge.CellId)"" value=""$sl"" style=""$($edge.Style)"" edge=""1"" source=""$sc"" target=""$tc"" parent=""1"">")
-            [void]$sb.AppendLine("            <mxGeometry relative=""1"" as=""geometry""/>")
+            $style = $edge.Style
+            $points = $null
+
+            # Bottom-out / top-in with the horizontal jog 20px above the target,
+            # so the connector clears anything beside the source (the queue
+            # settings note). Only when the target really is below the source;
+            # a loop back up the diagram keeps draw.io's automatic routing.
+            $src = $nodeById[$edge.SourceNodeId]; $tgt = $nodeById[$edge.TargetNodeId]
+            if ($edge.RouteDown -and $src -and $tgt -and $tgt.Y -gt ($src.Y + $src.Height + 30)) {
+                $style += "exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+                $jogY  = $tgt.Y - 20
+                $srcCx = [int]($src.X + $src.Width / 2)
+                $tgtCx = [int]($tgt.X + $tgt.Width / 2)
+                $points = "<Array as=""points""><mxPoint x=""$srcCx"" y=""$jogY""/><mxPoint x=""$tgtCx"" y=""$jogY""/></Array>"
+            }
+
+            [void]$sb.AppendLine("          <mxCell id=""$($edge.CellId)"" value=""$sl"" style=""$style"" edge=""1"" source=""$sc"" target=""$tc"" parent=""1"">")
+            if ($points) {
+                [void]$sb.AppendLine("            <mxGeometry relative=""1"" as=""geometry"">$points</mxGeometry>")
+            } else {
+                [void]$sb.AppendLine("            <mxGeometry relative=""1"" as=""geometry""/>")
+            }
             [void]$sb.AppendLine("          </mxCell>")
         }
     }
