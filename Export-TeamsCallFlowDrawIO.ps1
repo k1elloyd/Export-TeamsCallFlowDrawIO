@@ -97,6 +97,7 @@ switch ($StylePreset) {
             "Disconnect"      = "ellipse;whiteSpace=wrap;html=1;fillColor=#9B0000;fontColor=#FFFFFF;strokeColor=#4B0000;strokeWidth=3;fontSize=11;fontFamily=Segoe UI;fontStyle=1;"
             "Holiday"         = "shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#7A5000;fontColor=#FFFFFF;strokeColor=#3D2800;strokeWidth=3;fontSize=11;fontFamily=Segoe UI;size=0.25;"
             "TimeoutOverflow" = "shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#C84B00;fontColor=#FFFFFF;strokeColor=#602400;strokeWidth=3;fontSize=10;fontFamily=Segoe UI;"
+            "Announcement"    = "rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#FFD8B0;fontColor=#000000;strokeColor=#602400;strokeWidth=3;fontSize=9;fontFamily=Segoe UI;spacingLeft=4;spacingRight=4;"
             "Title"           = "text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontFamily=Segoe UI;fontStyle=1;fontColor=#000000;"
             "Greeting"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFFACD;strokeColor=#A0800A;strokeWidth=2;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
             "Schedule"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#C8E6FF;strokeColor=#004C99;strokeWidth=2;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
@@ -125,6 +126,7 @@ switch ($StylePreset) {
             "Disconnect"      = "ellipse;whiteSpace=wrap;html=1;fillColor=#2A2A2A;fontColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontFamily=Segoe UI;fontStyle=1;"
             "Holiday"         = "shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#B0B0B0;fontColor=#000000;strokeColor=#1A1A1A;fontSize=11;fontFamily=Segoe UI;size=0.25;"
             "TimeoutOverflow" = "shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#CCCCCC;fontColor=#000000;strokeColor=#1A1A1A;fontSize=10;fontFamily=Segoe UI;"
+            "Announcement"    = "rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#EEEEEE;fontColor=#000000;strokeColor=#1A1A1A;fontSize=9;fontFamily=Segoe UI;spacingLeft=4;spacingRight=4;"
             "Title"           = "text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontFamily=Segoe UI;fontStyle=1;fontColor=#000000;"
             "Greeting"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#F0F0F0;strokeColor=#555555;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
             "Schedule"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#E0E0E0;strokeColor=#333333;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
@@ -154,6 +156,7 @@ switch ($StylePreset) {
             "Disconnect"      = "ellipse;whiteSpace=wrap;html=1;fillColor=#C00000;fontColor=#FFFFFF;strokeColor=#8B0000;fontSize=11;fontFamily=Segoe UI;fontStyle=1;"
             "Holiday"         = "shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#BF8F00;fontColor=#FFFFFF;strokeColor=#8C6900;fontSize=11;fontFamily=Segoe UI;size=0.25;"
             "TimeoutOverflow" = "shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#ED7D31;fontColor=#FFFFFF;strokeColor=#C55A11;fontSize=10;fontFamily=Segoe UI;"
+            "Announcement"    = "rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#FCE4D6;fontColor=#000000;strokeColor=#C55A11;fontSize=9;fontFamily=Segoe UI;spacingLeft=4;spacingRight=4;"
             "Title"           = "text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontFamily=Segoe UI;fontStyle=1;fontColor=#333333;"
             "Greeting"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
             "Schedule"        = "shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=9;fontFamily=Segoe UI;align=left;verticalAlign=top;spacingLeft=5;spacingRight=5;spacingTop=5;"
@@ -183,6 +186,7 @@ $NodeSizes = @{
     "Disconnect"      = @{ Width = 120; Height = 60 }
     "Holiday"         = @{ Width = 200; Height = 60 }
     "TimeoutOverflow" = @{ Width = 200; Height = 50 }
+    "Announcement"    = @{ Width = 220; Height = 80 }
     "Title"           = @{ Width = 400; Height = 30 }
     "Greeting"        = @{ Width = 280; Height = 80 }
     "Schedule"        = @{ Width = 220; Height = 160 }
@@ -238,6 +242,36 @@ function Get-DtmfDisplayKey {
     }
 }
 
+function Get-PromptInfo {
+<#
+.SYNOPSIS
+    Summarises a Teams prompt (greeting or announcement).
+    Returns a hashtable with Type (TTS/Audio) and Text, or $null if the prompt is empty.
+#>
+    param([object]$Prompt)
+
+    if ($null -eq $Prompt) { return $null }
+
+    if ($Prompt.TextToSpeechPrompt) {
+        return @{
+            Type = "TTS"
+            Text = $Prompt.TextToSpeechPrompt
+        }
+    }
+    elseif ($Prompt.AudioFilePrompt) {
+        $fileName = "Audio File"
+        if ($Prompt.AudioFilePrompt.FileName) {
+            $fileName = $Prompt.AudioFilePrompt.FileName
+        }
+        return @{
+            Type = "Audio"
+            Text = $fileName
+        }
+    }
+
+    return $null
+}
+
 function Get-CallFlowGreeting {
 <#
 .SYNOPSIS
@@ -250,26 +284,7 @@ function Get-CallFlowGreeting {
         return $null
     }
 
-    $greeting = $CallFlow.Greetings | Select-Object -First 1
-
-    if ($greeting.TextToSpeechPrompt) {
-        return @{
-            Type = "TTS"
-            Text = $greeting.TextToSpeechPrompt
-        }
-    }
-    elseif ($greeting.AudioFilePrompt) {
-        $fileName = "Audio File"
-        if ($greeting.AudioFilePrompt.FileName) {
-            $fileName = $greeting.AudioFilePrompt.FileName
-        }
-        return @{
-            Type = "Audio"
-            Text = $fileName
-        }
-    }
-
-    return $null
+    return Get-PromptInfo -Prompt ($CallFlow.Greetings | Select-Object -First 1)
 }
 
 function Get-UserDisplayName {
@@ -539,6 +554,10 @@ function Resolve-CallTarget {
 
     A CQ action of "Voicemail" (as opposed to "SharedVoicemail") is a *user's*
     personal voicemail and resolves to Type "Voicemail" with the user's name.
+
+    An AA menu action of "Announcement" plays -Prompt and then repeats the menu;
+    it has no call target and resolves to Type "Announcement" carrying the
+    prompt summary (from Get-PromptInfo) in Prompt.
 .OUTPUTS
     Hashtable with keys: DisplayName, Type, LinkedId
 #>
@@ -550,11 +569,17 @@ function Resolve-CallTarget {
         [hashtable]$CQLookup,
         [hashtable]$UserCache,
         [hashtable]$AAByAppInstance,
-        [hashtable]$CQByAppInstance
+        [hashtable]$CQByAppInstance,
+        [object]$Prompt
     )
 
     if ($Action -eq "DisconnectCall") {
         return @{ DisplayName = "Disconnect"; Type = "Disconnect"; LinkedId = $null }
+    }
+
+    if ($Action -eq "Announcement") {
+        $promptInfo = Get-PromptInfo -Prompt (@($Prompt) | Select-Object -First 1)
+        return @{ DisplayName = "Announcement"; Type = "Announcement"; LinkedId = $null; Prompt = $promptInfo }
     }
 
     # Call Queue "Voicemail" action = a user's personal voicemail (target is
@@ -828,6 +853,24 @@ function Resolve-AndAddTargetNode {
                     -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
             }
         }
+        "Announcement" {
+            # One per key: each announcement plays its own message, then the
+            # caller is returned to the menu.
+            $targetNodeId = "${DisambiguationKey}_ann"
+            if (-not $DefinedNodes.Value.Contains($targetNodeId)) {
+                $annLabel = "<b>&#x1f4e2; Announcement</b>"
+                if ($Target.Prompt) {
+                    $annText = [string]$Target.Prompt.Text
+                    if ($annText.Length -gt 110) { $annText = $annText.Substring(0, 107) + "..." }
+                    $annPrefix = if ($Target.Prompt.Type -eq "Audio") { "Audio file: " } else { "" }
+                    $annLabel += "<br/><i>$annPrefix$(Escape-XmlString $annText)</i>"
+                }
+                $annLabel += "<br/>&#x21BA; then repeats the menu"
+                Add-DiagramNode -NodeId $targetNodeId -Label $annLabel -Type "Announcement" `
+                    -Tier $Tier -BranchIndex $BranchIndex -PositionInBranch $PositionInBranch -ParentNodeId $ParentNodeId `
+                    -Nodes $Nodes -NodeMap $NodeMap -NextCellId $NextCellId -DefinedNodes $DefinedNodes | Out-Null
+            }
+        }
         "Disconnect" {
             $targetNodeId = "${DisambiguationKey}_disc"
             if (-not $DefinedNodes.Value.Contains($targetNodeId)) {
@@ -1040,7 +1083,7 @@ function Build-CallFlowNodes {
             $callTarget = $option.CallTarget
             if ($action -eq "TransferCallToOperator" -and -not $callTarget) { $callTarget = $Operator }
 
-            $target = Resolve-CallTarget -CallTarget $callTarget -Action $action `
+            $target = Resolve-CallTarget -CallTarget $callTarget -Action $action -Prompt $option.Prompt `
                 -ResourceAccountLookup $ResourceAccountLookup `
                 -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
                 -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance
@@ -1087,7 +1130,7 @@ function Build-CallFlowNodes {
             $defaultActionStr = $defaultAction.Action.ToString()
             $callTarget = $defaultAction.CallTarget
             if ($defaultActionStr -eq "TransferCallToOperator" -and -not $callTarget) { $callTarget = $Operator }
-            $target = Resolve-CallTarget -CallTarget $callTarget `
+            $target = Resolve-CallTarget -CallTarget $callTarget -Prompt $defaultAction.Prompt `
                 -Action $defaultActionStr -ResourceAccountLookup $ResourceAccountLookup `
                 -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
                 -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance
@@ -1175,7 +1218,7 @@ function Test-DiagramIntegrity {
     }
 
     # --- Empty-label nodes (excluding title and note nodes which may be intentionally blank) ---
-    $nonNoteTypes = @("AA","CQ","Menu","MenuAfterHours","User","ExternalPstn","SharedVoicemail","Disconnect","Holiday","TimeoutOverflow")
+    $nonNoteTypes = @("AA","CQ","Menu","MenuAfterHours","User","ExternalPstn","SharedVoicemail","Disconnect","Holiday","TimeoutOverflow","Announcement")
     foreach ($node in ($Nodes | Where-Object { $_.Type -in $nonNoteTypes })) {
         if ([string]::IsNullOrWhiteSpace($node.Label)) {
             Write-Warning "$prefix Node '$($node.NodeId)' (type $($node.Type)) has an empty label."
@@ -1650,6 +1693,7 @@ function Build-LegendPage {
         @{ Label = "External PSTN"; Type = "ExternalPstn" }
         @{ Label = "Voicemail (Shared / Personal)"; Type = "SharedVoicemail" }
         @{ Label = "Disconnect"; Type = "Disconnect" }
+        @{ Label = "Announcement (then repeats menu)"; Type = "Announcement" }
         @{ Label = "Holiday"; Type = "Holiday" }
         @{ Label = "Timeout / Overflow / No Agents"; Type = "TimeoutOverflow" }
         @{ Label = "TTS / Audio Greeting"; Type = "Greeting" }
