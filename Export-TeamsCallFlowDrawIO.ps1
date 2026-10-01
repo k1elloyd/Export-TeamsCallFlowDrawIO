@@ -574,6 +574,9 @@ function Resolve-CallTarget {
     }
 
     if ($null -eq $CallTarget) {
+        if ($Action -eq "TransferCallToOperator") {
+            return @{ DisplayName = "Operator (none set on this Auto Attendant)"; Type = "Unknown"; LinkedId = $null }
+        }
         return @{ DisplayName = "No Target Configured"; Type = "Unknown"; LinkedId = $null }
     }
 
@@ -956,10 +959,15 @@ function Build-CallFlowNodes {
 .SYNOPSIS
     Processes a call flow (business hours, after hours, or holiday) and generates
     draw.io nodes and edges, including greeting notes where present.
+.PARAMETER Operator
+    The Auto Attendant's Operator callable entity. A "TransferCallToOperator"
+    option usually has no CallTarget of its own - Teams stores the operator
+    once on the AA - so it resolves to this instead.
 #>
     param(
         [object]$CallFlow, [string]$ParentNodeId, [string]$FlowType,
         [string]$LinkLabel, [string]$AAIdentity, [int]$BranchIndex,
+        [object]$Operator,
         [hashtable]$ResourceAccountLookup, [hashtable]$AALookup,
         [hashtable]$CQLookup, [hashtable]$UserCache,
         [hashtable]$AAByAppInstance, [hashtable]$CQByAppInstance,
@@ -1029,8 +1037,10 @@ function Build-CallFlowNodes {
         foreach ($option in $menuOptions) {
             $dtmfKey = Get-DtmfDisplayKey $option.DtmfResponse.ToString()
             $action = $option.Action.ToString()
+            $callTarget = $option.CallTarget
+            if ($action -eq "TransferCallToOperator" -and -not $callTarget) { $callTarget = $Operator }
 
-            $target = Resolve-CallTarget -CallTarget $option.CallTarget -Action $action `
+            $target = Resolve-CallTarget -CallTarget $callTarget -Action $action `
                 -ResourceAccountLookup $ResourceAccountLookup `
                 -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
                 -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance
@@ -1049,6 +1059,7 @@ function Build-CallFlowNodes {
                     $voicePrompt = ($option.VoiceResponses | Select-Object -First 1)
                     if ($voicePrompt) { $optionLabel = "Press $dtmfKey / Say $(Escape-XmlString $voicePrompt)" }
                 }
+                if ($action -eq "TransferCallToOperator") { $optionLabel += " (Operator)" }
                 if (-not $targetOptionLabels.Contains($targetNodeId)) {
                     $targetOptionLabels[$targetNodeId] = [System.Collections.Generic.List[string]]::new()
                 }
@@ -1073,8 +1084,11 @@ function Build-CallFlowNodes {
         # No IVR menu — direct transfer
         $defaultAction = $menu.MenuOptions | Where-Object { $_.DtmfResponse.ToString() -eq "Automatic" } | Select-Object -First 1
         if ($defaultAction) {
-            $target = Resolve-CallTarget -CallTarget $defaultAction.CallTarget `
-                -Action $defaultAction.Action.ToString() -ResourceAccountLookup $ResourceAccountLookup `
+            $defaultActionStr = $defaultAction.Action.ToString()
+            $callTarget = $defaultAction.CallTarget
+            if ($defaultActionStr -eq "TransferCallToOperator" -and -not $callTarget) { $callTarget = $Operator }
+            $target = Resolve-CallTarget -CallTarget $callTarget `
+                -Action $defaultActionStr -ResourceAccountLookup $ResourceAccountLookup `
                 -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
                 -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance
 
@@ -1821,7 +1835,7 @@ function Export-AADiagram {
 
     if ($aa.DefaultCallFlow) {
         Build-CallFlowNodes -CallFlow $aa.DefaultCallFlow -ParentNodeId $aaNodeId `
-            -FlowType "BusinessHours" -LinkLabel "Business Hours" -AAIdentity $aa.Identity `
+            -FlowType "BusinessHours" -LinkLabel "Business Hours" -AAIdentity $aa.Identity -Operator $aa.Operator `
             -BranchIndex $branchCounter -ResourceAccountLookup $ResourceAccountLookup `
             -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
             -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance `
@@ -1835,7 +1849,7 @@ function Export-AADiagram {
         $ahFlow = $aa.CallFlows | Where-Object { $_.Id -eq $ahAssoc.CallFlowId }
         if ($ahFlow) {
             Build-CallFlowNodes -CallFlow $ahFlow -ParentNodeId $aaNodeId `
-                -FlowType "AfterHours" -LinkLabel "After Hours" -AAIdentity $aa.Identity `
+                -FlowType "AfterHours" -LinkLabel "After Hours" -AAIdentity $aa.Identity -Operator $aa.Operator `
                 -BranchIndex $branchCounter -ResourceAccountLookup $ResourceAccountLookup `
                 -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
                 -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance `
@@ -1855,7 +1869,7 @@ function Export-AADiagram {
             $holidayDates = Get-HolidayScheduleDates -AutoAttendant $aa -HolidayAssociations $holAssocs -CallFlowId $hf.Id
             if ($holidayDates) { $hn = "$hn<br/>$holidayDates" }
             Build-CallFlowNodes -CallFlow $hf -ParentNodeId $aaNodeId `
-                -FlowType "Holiday" -LinkLabel $hn -AAIdentity $aa.Identity `
+                -FlowType "Holiday" -LinkLabel $hn -AAIdentity $aa.Identity -Operator $aa.Operator `
                 -BranchIndex $branchCounter -ResourceAccountLookup $ResourceAccountLookup `
                 -AALookup $AALookup -CQLookup $CQLookup -UserCache $UserCache `
                 -AAByAppInstance $AAByAppInstance -CQByAppInstance $CQByAppInstance `
