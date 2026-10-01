@@ -8,7 +8,7 @@ This tool solves the challenge of manually documenting complex cloud telephony s
 
 ## 🌟 Key Features
 
-- **End-to-End Call Path Analysis:** Maps entire call routing including Business Hours, After Hours, Holiday calendars (with the actual holiday date ranges), IVR key presses (DTMF and voice triggers), Call Queue agent counts, routing methods, and all three queue exception rules (timeout, overflow, no agents), including for queues nested behind other queues.
+- **End-to-End Call Path Analysis:** Maps entire call routing including Business Hours, After Hours, Holiday calendars (with the actual holiday date ranges), IVR key presses (DTMF and voice triggers, including "transfer to operator" keys resolved to the Auto Attendant's operator and announcement keys), Call Queue agent counts, routing methods, and all three queue exception rules (timeout, overflow, no agents), including for queues nested behind other queues.
 - **Dynamic Overlap-Free Layout:** Powered by an advanced, boundary-aware layout engine that calculates the precise footprint of nodes (including whole nested-queue subtrees, queue settings notes, schedule notes, and speech greetings), completely eliminating horizontal node collisions or overlapping branches. Multiple IVR keys that route to the same target are combined onto a single connector (e.g. `Press 2, Press 3`) rather than stacked on top of each other.
 - **Selectable Colour Themes:** Ships with three palettes selected via `-StylePreset`: `Default` (vibrant Microsoft-themed), `HighContrast` (bold colours and thick borders for accessibility / projectors), and `Monochrome` (greyscale for black-and-white printing). Segoe UI typography, HSL-harmonized fills, clean rounded borders, and distinct shapes throughout.
 - **Rich Greeting Note Integration:** Automatically extracts Text-to-Speech (TTS) prompts or audio greeting filenames and renders them as elegant, clean sticky notes floating next to their respective menu nodes.
@@ -39,6 +39,7 @@ The exporter uses a clear, highly legible color hierarchy:
 | **Greeting Note** | Sticky Note | Light Yellow (`#FFF2CC`) | Renders Text-to-Speech or audio greeting file details |
 | **Schedule Panel** | Sticky Note | Light Blue (`#DAE8FC`) | Renders HTML calendar hours next to AA roots |
 | **Disconnect** | Ellipse | Dark Red (`#C00000`) | Call termination points |
+| **Announcement** | Dashed Rounded Rectangle | Light Orange (`#FCE4D6`) | A menu key that plays a message (TTS text or audio file name shown), then repeats the menu |
 
 ---
 
